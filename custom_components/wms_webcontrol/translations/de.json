@@ -1,0 +1,37 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "WAREMA WMS WebControl",
+        "description": "Adresse der lokalen WebControl-Box eingeben. Die Box muss direkt erreichbar sein (z. B. http://webcontrol.local oder http://10.1.5.17).",
+        "data": {
+          "url": "WebControl-URL",
+          "update_interval": "Aktualisierungsintervall (Sekunden)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung zur WebControl-Box unter dieser Adresse nicht möglich.",
+      "unknown": "Unerwarteter Fehler. Details siehe Log."
+    },
+    "abort": {
+      "already_configured": "Diese WebControl-Box ist bereits eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "WAREMA WMS WebControl – Optionen",
+        "description": "Presets: eine Zeile je Preset als \"Name | payload_hex\". Geräteklassen-Überschreibung: eine Zeile je Kanal als \"Kanalname = awning\" (optional).",
+        "data": {
+          "update_interval": "Aktualisierungsintervall (Sekunden)",
+          "presets": "Presets (Name | payload_hex)",
+          "device_classes": "Geräteklassen-Überschreibung (Kanal = Klasse)"
+        }
+      }
+    },
+    "error": {
+      "invalid_preset": "Jede Preset-Zeile muss \"Name | payload_hex\" sein, payload_hex mit gerader Länge in Hex."
+    }
+  }
+}
