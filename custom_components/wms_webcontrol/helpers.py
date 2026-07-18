@@ -70,24 +70,27 @@ def resolve_invert(channel_name: str, device_class: str, override: dict[str, boo
 
 
 def awning_state(
-    ha_position: Optional[int],
+    lib_position: Optional[float],
     is_moving: bool,
-    target_ha: Optional[int],
+    target_lib: Optional[int],
 ) -> Optional[str]:
-    """Map an awning's HA position/movement to a status option key.
+    """Map an awning's physical (library) position/movement to a status key.
 
-    ``extended`` = ausgefahren (HA 100), ``retracted`` = eingefahren (HA 0).
+    Works in library space so the wording stays physically correct regardless
+    of how the Home Assistant percentage is oriented:
+    ``retracted`` = eingefahren (library 0), ``extended`` = ausgefahren
+    (library 100).
     """
-    if is_moving and target_ha is not None and ha_position is not None:
-        if target_ha > ha_position:
+    if is_moving and target_lib is not None and lib_position is not None:
+        if target_lib > lib_position:
             return "extending"
-        if target_ha < ha_position:
+        if target_lib < lib_position:
             return "retracting"
-    if ha_position is None:
+    if lib_position is None:
         return None
-    if ha_position >= 100:
+    if lib_position >= 100:
         return "extended"
-    if ha_position <= 0:
+    if lib_position <= 0:
         return "retracted"
     return "partial"
 

@@ -100,19 +100,21 @@ def test_resolved_device_class():
 # --- Awning status wording --------------------------------------------------
 
 
+# awning_state works in library (physical) space: lib 0 = eingefahren,
+# lib 100 = ausgefahren — independent of the HA percentage orientation.
 @pytest.mark.parametrize(
-    ("ha_position", "is_moving", "target", "expected"),
+    ("lib_position", "is_moving", "target_lib", "expected"),
     [
-        (0, False, None, "retracted"),      # HA closed -> eingefahren
-        (100, False, None, "extended"),     # HA open -> ausgefahren
+        (0, False, None, "retracted"),      # library 0 -> eingefahren
+        (100, False, None, "extended"),     # library 100 -> ausgefahren
         (40, False, None, "partial"),       # in between
-        (30, True, 100, "extending"),       # moving towards open -> fährt aus
-        (80, True, 0, "retracting"),        # moving towards closed -> fährt ein
+        (30, True, 100, "extending"),       # moving towards library 100 -> fährt aus
+        (80, True, 0, "retracting"),        # moving towards library 0 -> fährt ein
         (None, False, None, None),          # unknown position
     ],
 )
-def test_awning_state(ha_position, is_moving, target, expected):
-    assert helpers.awning_state(ha_position, is_moving, target) == expected
+def test_awning_state(lib_position, is_moving, target_lib, expected):
+    assert helpers.awning_state(lib_position, is_moving, target_lib) == expected
 
 
 # --- Boolean override parsing ----------------------------------------------

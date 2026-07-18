@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -72,6 +74,10 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
         # Last commanded HA target position per shade key, used to derive the
         # movement direction. Shared between the cover and the status sensor.
         self.targets: dict[str, int | None] = {}
+        # Serialises all box I/O: the WebControl server shares a single command
+        # counter and rejects overlapping/too-fast commands, so a poll and a
+        # move must never run concurrently.
+        self._lock = threading.Lock()
 
     async def async_setup(self) -> None:
         """Connect to the box and run auto-discovery (blocking I/O)."""
@@ -105,18 +111,19 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
     def _poll(self) -> dict[str, ShadeInfo]:
         """Blocking poll of every discovered shade. Runs in the executor."""
         result: dict[str, ShadeInfo] = {}
-        for shade in self.shades:
-            position, is_moving, last_updated = shade.get_shade_state(force_update=True)
-            key = shade_key(shade.room.id, shade.channel.id)
-            result[key] = ShadeInfo(
-                room_id=shade.room.id,
-                channel_id=shade.channel.id,
-                room_name=shade.get_room_name(),
-                channel_name=shade.get_channel_name(),
-                position=position,
-                is_moving=is_moving,
-                last_updated=last_updated,
-            )
+        with self._lock:
+            for shade in self.shades:
+                position, is_moving, last_updated = shade.get_shade_state(force_update=True)
+                key = shade_key(shade.room.id, shade.channel.id)
+                result[key] = ShadeInfo(
+                    room_id=shade.room.id,
+                    channel_id=shade.channel.id,
+                    room_name=shade.get_room_name(),
+                    channel_name=shade.get_channel_name(),
+                    position=position,
+                    is_moving=is_moving,
+                    last_updated=last_updated,
+                )
         return result
 
     def _adjust_interval(self, any_moving: bool) -> None:
@@ -149,9 +156,32 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
     async def async_set_position(self, key: str, lib_position: int) -> None:
         """Move a shade to a library position (0 = open, 100 = closed)."""
         shade = self._shade_by_key(key)
-        await self.hass.async_add_executor_job(shade.set_shade_position, lib_position)
+        await self.hass.async_add_executor_job(self._move, shade, lib_position)
         self.trigger_fast_poll()
         await self.async_request_refresh()
+
+    def _move(self, shade: Shade, lib_position: int) -> None:
+        """Send a single move command quickly. Runs in the executor.
+
+        Bypasses the library's verify-and-retry loop (which is slow and re-sends
+        the command when a shade doesn't report position feedback). We send the
+        move once and let the coordinator's fast poll pick up the new state.
+        The wire protocol uses a doubled position value (library convention).
+        """
+        ctrl = shade.wms_ctrl
+        last_exc: BaseException | None = None
+        with self._lock:
+            for attempt in range(NUM_RETRIES):
+                try:
+                    ctrl.send_rx_check_ready(shade.room.id, shade.channel.id)
+                    time.sleep(TIME_BETWEEN_CMDS)
+                    ctrl.send_tx_move_shade(shade.room.id, shade.channel.id, lib_position * 2)
+                    return
+                except TRANSPORT_ERRORS as err:
+                    last_exc = err
+                    time.sleep(TIME_BETWEEN_CMDS)
+            if last_exc is not None:
+                raise last_exc
 
     async def async_send_raw(self, payload_hex: str) -> None:
         """Replay a raw preset payload verbatim."""
@@ -163,10 +193,11 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
 
     def _send_raw(self, payload_hex: str) -> None:
         """Blocking raw send. Runs in the executor."""
-        helpers.send_raw(
-            self.controller,
-            payload_hex,
-            retries=NUM_RETRIES,
-            wait=TIME_BETWEEN_CMDS,
-            exceptions=TRANSPORT_ERRORS,
-        )
+        with self._lock:
+            helpers.send_raw(
+                self.controller,
+                payload_hex,
+                retries=NUM_RETRIES,
+                wait=TIME_BETWEEN_CMDS,
+                exceptions=TRANSPORT_ERRORS,
+            )

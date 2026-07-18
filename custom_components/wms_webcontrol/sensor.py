@@ -81,11 +81,12 @@ class WmsAwningStatus(CoordinatorEntity[WmsWebControlCoordinator], SensorEntity)
 
     @property
     def native_value(self) -> str | None:
-        """Return the current status option key."""
+        """Return the current status option key (physical, library space)."""
         info = self._info
         if info is None:
             return None
-        ha_position = helpers.ha_from_lib(info.position, self._invert)
-        return helpers.awning_state(
-            ha_position, info.is_moving, self.coordinator.targets.get(self._key)
+        target_ha = self.coordinator.targets.get(self._key)
+        target_lib = (
+            helpers.lib_from_ha(target_ha, self._invert) if target_ha is not None else None
         )
+        return helpers.awning_state(info.position, info.is_moving, target_lib)
