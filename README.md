@@ -19,11 +19,19 @@ Die Integration nutzt die PyPI-Library
 ## Funktionsumfang
 
 - **Cover-Entity je entdecktem Kanal** mit `OPEN`, `CLOSE`, `SET_POSITION`.
-  - Position wird gegenüber der Box invertiert: HA `100 % = offen`, Library `0 = offen`.
+  - Rollos/Raffstores: Position wird gegenüber der Box invertiert
+    (HA `100 % = offen`, Library `0 = offen`).
+  - Markisen (`awning`): Position wird **nicht** invertiert – entsprechend der
+    HA-Konvention `open` = ausgefahren, `closed` = eingefahren. Eine eingefahrene
+    Markise zeigt damit „Geschlossen". Pro Kanal überschreibbar (siehe Optionen).
   - `is_opening` / `is_closing` werden aus dem Bewegungsstatus und der zuletzt
     kommandierten Zielposition abgeleitet.
   - Geräteklasse: Markisen → `awning`, sonst `shutter` (per Name-Heuristik,
     überschreibbar, siehe unten).
+- **Status-Sensor je Markise** mit Klartext-Zuständen
+  „Eingefahren / Ausgefahren / Fährt ein / Fährt aus / Teilweise ausgefahren"
+  (übersetzt) – gedacht fürs Dashboard, da die HA-Cover-Grundzustände
+  („Offen/Geschlossen") sich nicht pro Entity umbenennen lassen.
 - **Preset-Buttons** für gespeicherte Szenen. Ein Tastendruck spielt die
   mitgeschnittene Protokoll-Payload 1:1 ab (kein Positions-Parsing).
 - **DataUpdateCoordinator** mit konfigurierbarem Intervall; nach einem Fahrbefehl
@@ -73,6 +81,10 @@ Ordner `custom_components/wms_webcontrol/` in das HA-Config-Verzeichnis kopieren
   (den setzt die Library automatisch). Format der Szenen: `0821 + 00 + <idx> + 08ffffffff`.
 - **Geräteklassen-Überschreibung** (optional) – eine Zeile je Kanal im Format
   `Kanalname = awning` (oder `shutter`, `blind`, `curtain`, `shade`, …).
+- **Position invertieren** (optional) – eine Zeile je Kanal im Format
+  `Kanalname = true` oder `= false`. Standard: Markisen `false` (nicht invertiert),
+  alles andere `true`. Nur nötig, falls eine Markise die Positionen andersherum
+  meldet als erwartet.
 
 ## Eigene Presets mitschneiden
 

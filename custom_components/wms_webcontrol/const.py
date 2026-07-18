@@ -13,6 +13,21 @@ LOGGER: Final = logging.getLogger(__package__)
 CONF_UPDATE_INTERVAL: Final = "update_interval"
 CONF_PRESETS: Final = "presets"
 CONF_DEVICE_CLASSES: Final = "device_classes"
+CONF_INVERT: Final = "invert"
+
+# Awning status sensor option keys (translated in strings.json).
+AWNING_STATE_RETRACTED: Final = "retracted"
+AWNING_STATE_EXTENDED: Final = "extended"
+AWNING_STATE_RETRACTING: Final = "retracting"
+AWNING_STATE_EXTENDING: Final = "extending"
+AWNING_STATE_PARTIAL: Final = "partial"
+AWNING_STATES: Final = [
+    AWNING_STATE_RETRACTED,
+    AWNING_STATE_EXTENDED,
+    AWNING_STATE_RETRACTING,
+    AWNING_STATE_EXTENDING,
+    AWNING_STATE_PARTIAL,
+]
 
 # Preset dict keys
 PRESET_NAME: Final = "name"

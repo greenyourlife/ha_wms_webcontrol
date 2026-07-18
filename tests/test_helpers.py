@@ -48,6 +48,90 @@ def test_inversion_round_trips(ha_position):
     assert helpers.invert_position(lib) == ha_position
 
 
+# --- Configurable inversion (shutters vs awnings) --------------------------
+
+
+@pytest.mark.parametrize(
+    ("lib", "invert", "expected_ha"),
+    [
+        (0, True, 100),   # shutter: library open -> HA open
+        (100, True, 0),   # shutter: library closed -> HA closed
+        (0, False, 0),    # awning: library 0 (retracted) -> HA 0 (closed)
+        (100, False, 100),  # awning: library 100 (extended) -> HA 100 (open)
+    ],
+)
+def test_ha_from_lib(lib, invert, expected_ha):
+    assert helpers.ha_from_lib(lib, invert) == expected_ha
+
+
+@pytest.mark.parametrize(
+    ("ha", "invert", "expected_lib"),
+    [
+        (100, True, 0),   # shutter open -> library 0
+        (0, True, 100),   # shutter closed -> library 100
+        (100, False, 100),  # awning open/extended -> library 100
+        (0, False, 0),    # awning closed/retracted -> library 0
+    ],
+)
+def test_lib_from_ha(ha, invert, expected_lib):
+    assert helpers.lib_from_ha(ha, invert) == expected_lib
+
+
+def test_resolve_invert_defaults():
+    # Awnings are not inverted; everything else is.
+    assert helpers.resolve_invert("Markise", "awning", {}) is False
+    assert helpers.resolve_invert("Rollo", "shutter", {}) is True
+
+
+def test_resolve_invert_override_wins():
+    assert helpers.resolve_invert("Markise", "awning", {"markise": True}) is True
+    assert helpers.resolve_invert("Rollo", "shutter", {"rollo": False}) is False
+
+
+def test_resolved_device_class():
+    assert helpers.resolved_device_class("Markise Terrasse", {}) == "awning"
+    assert helpers.resolved_device_class("Rollo", {}) == "shutter"
+    # Valid override wins; invalid override falls back to the heuristic.
+    valid = {"awning", "shutter", "blind"}
+    assert helpers.resolved_device_class("Rollo", {"rollo": "awning"}, valid) == "awning"
+    assert helpers.resolved_device_class("Rollo", {"rollo": "bogus"}, valid) == "shutter"
+
+
+# --- Awning status wording --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("ha_position", "is_moving", "target", "expected"),
+    [
+        (0, False, None, "retracted"),      # HA closed -> eingefahren
+        (100, False, None, "extended"),     # HA open -> ausgefahren
+        (40, False, None, "partial"),       # in between
+        (30, True, 100, "extending"),       # moving towards open -> fährt aus
+        (80, True, 0, "retracting"),        # moving towards closed -> fährt ein
+        (None, False, None, None),          # unknown position
+    ],
+)
+def test_awning_state(ha_position, is_moving, target, expected):
+    assert helpers.awning_state(ha_position, is_moving, target) == expected
+
+
+# --- Boolean override parsing ----------------------------------------------
+
+
+def test_parse_bool_map():
+    text = "Markise = false\nRollo = true\nGarage = ja\nJunk line"
+    assert helpers.parse_bool_map(text) == {
+        "markise": False,
+        "rollo": True,
+        "garage": True,
+    }
+
+
+def test_format_bool_map_roundtrips():
+    mapping = {"markise": False, "rollo": True}
+    assert helpers.parse_bool_map(helpers.format_bool_map(mapping)) == mapping
+
+
 # --- Movement / state derivation -------------------------------------------
 
 

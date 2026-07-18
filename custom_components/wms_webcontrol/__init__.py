@@ -10,7 +10,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 
 from .coordinator import WmsConfigEntry, WmsWebControlCoordinator
 
-PLATFORMS: list[Platform] = [Platform.COVER, Platform.BUTTON]
+PLATFORMS: list[Platform] = [Platform.COVER, Platform.BUTTON, Platform.SENSOR]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: WmsConfigEntry) -> bool:

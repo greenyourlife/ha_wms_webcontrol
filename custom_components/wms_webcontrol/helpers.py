@@ -25,6 +25,103 @@ def to_lib_position(ha_position: int) -> int:
     return 100 - int(round(ha_position))
 
 
+def ha_from_lib(lib_position: float, invert: bool) -> int:
+    """Map a library position to a Home Assistant position.
+
+    ``invert=True`` (shutters/blinds): HA ``100 = open`` = library ``0``.
+    ``invert=False`` (awnings): HA follows the library value directly, so
+    HA ``0 = closed`` corresponds to a retracted awning (library ``0``).
+    """
+    if invert:
+        return 100 - int(round(lib_position))
+    return int(round(lib_position))
+
+
+def lib_from_ha(ha_position: int, invert: bool) -> int:
+    """Map a Home Assistant position back to a library position."""
+    if invert:
+        return 100 - int(round(ha_position))
+    return int(round(ha_position))
+
+
+def resolved_device_class(
+    channel_name: str,
+    override: dict[str, str],
+    valid: Optional[set] = None,
+) -> str:
+    """Resolve a channel's device class string (override or name heuristic)."""
+    value = (override or {}).get((channel_name or "").lower())
+    if value and (valid is None or value in valid):
+        return value
+    return guess_device_class(channel_name)
+
+
+def resolve_invert(channel_name: str, device_class: str, override: dict[str, bool]) -> bool:
+    """Decide whether a channel's position should be inverted.
+
+    Per-channel overrides win; otherwise awnings are not inverted (HA awning
+    convention: ``open`` = extended, ``closed`` = retracted) while everything
+    else is inverted (library ``0 = open`` vs HA ``100 = open``).
+    """
+    key = (channel_name or "").lower()
+    if key in override:
+        return override[key]
+    return device_class != "awning"
+
+
+def awning_state(
+    ha_position: Optional[int],
+    is_moving: bool,
+    target_ha: Optional[int],
+) -> Optional[str]:
+    """Map an awning's HA position/movement to a status option key.
+
+    ``extended`` = ausgefahren (HA 100), ``retracted`` = eingefahren (HA 0).
+    """
+    if is_moving and target_ha is not None and ha_position is not None:
+        if target_ha > ha_position:
+            return "extending"
+        if target_ha < ha_position:
+            return "retracting"
+    if ha_position is None:
+        return None
+    if ha_position >= 100:
+        return "extended"
+    if ha_position <= 0:
+        return "retracted"
+    return "partial"
+
+
+def _parse_bool(value: str) -> Optional[bool]:
+    """Parse a human-written boolean; returns None if unrecognised."""
+    lowered = value.strip().lower()
+    if lowered in ("true", "1", "yes", "ja", "on", "invert"):
+        return True
+    if lowered in ("false", "0", "no", "nein", "off"):
+        return False
+    return None
+
+
+def parse_bool_map(text: str) -> dict[str, bool]:
+    """Parse ``channel name = true/false`` lines into a lookup dict."""
+    result: dict[str, bool] = {}
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if not line or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip().lower()
+        parsed = _parse_bool(value)
+        if key and parsed is not None:
+            result[key] = parsed
+    return result
+
+
+def format_bool_map(mapping: dict[str, bool]) -> str:
+    """Render a boolean override mapping back into the options text."""
+    return "\n".join(f"{key} = {str(value).lower()}" for key, value in mapping.items())
+
+
 def derive_movement(
     is_moving: bool,
     target_ha: Optional[int],

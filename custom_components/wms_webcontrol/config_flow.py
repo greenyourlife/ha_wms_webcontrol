@@ -27,6 +27,7 @@ from homeassistant.helpers.selector import (
 from . import helpers
 from .const import (
     CONF_DEVICE_CLASSES,
+    CONF_INVERT,
     CONF_PRESETS,
     CONF_UPDATE_INTERVAL,
     DEFAULT_PRESETS,
@@ -131,6 +132,9 @@ class WmsOptionsFlow(OptionsFlow):
                         CONF_DEVICE_CLASSES: helpers.parse_device_classes_text(
                             user_input.get(CONF_DEVICE_CLASSES, "")
                         ),
+                        CONF_INVERT: helpers.parse_bool_map(
+                            user_input.get(CONF_INVERT, "")
+                        ),
                     },
                 )
 
@@ -140,6 +144,7 @@ class WmsOptionsFlow(OptionsFlow):
         device_classes_default = helpers.format_device_classes_text(
             options.get(CONF_DEVICE_CLASSES, {})
         )
+        invert_default = helpers.format_bool_map(options.get(CONF_INVERT, {}))
         schema = vol.Schema(
             {
                 vol.Required(
@@ -151,6 +156,9 @@ class WmsOptionsFlow(OptionsFlow):
                 ): _MULTILINE_TEXT,
                 vol.Optional(
                     CONF_DEVICE_CLASSES, default=device_classes_default
+                ): _MULTILINE_TEXT,
+                vol.Optional(
+                    CONF_INVERT, default=invert_default
                 ): _MULTILINE_TEXT,
             }
         )

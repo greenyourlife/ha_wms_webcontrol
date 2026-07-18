@@ -69,6 +69,9 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
         self.controller: WmsController | None = None
         self.shades: list[Shade] = []
         self._fast_until: float | None = None
+        # Last commanded HA target position per shade key, used to derive the
+        # movement direction. Shared between the cover and the status sensor.
+        self.targets: dict[str, int | None] = {}
 
     async def async_setup(self) -> None:
         """Connect to the box and run auto-discovery (blocking I/O)."""
@@ -90,6 +93,11 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
             data = await self.hass.async_add_executor_job(self._poll)
         except TRANSPORT_ERRORS as err:
             raise UpdateFailed(f"Error communicating with WebControl: {err}") from err
+
+        # Once a shade has settled, forget its movement target.
+        for key, info in data.items():
+            if not info.is_moving:
+                self.targets.pop(key, None)
 
         self._adjust_interval(any(info.is_moving for info in data.values()))
         return data
@@ -133,6 +141,10 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
             if shade_key(shade.room.id, shade.channel.id) == key:
                 return shade
         raise KeyError(key)
+
+    def set_target(self, key: str, ha_position: int | None) -> None:
+        """Record the last commanded HA target position for a shade."""
+        self.targets[key] = ha_position
 
     async def async_set_position(self, key: str, lib_position: int) -> None:
         """Move a shade to a library position (0 = open, 100 = closed)."""

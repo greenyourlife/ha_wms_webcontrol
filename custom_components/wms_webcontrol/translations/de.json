@@ -22,16 +22,31 @@
     "step": {
       "init": {
         "title": "WAREMA WMS WebControl – Optionen",
-        "description": "Presets: eine Zeile je Preset als \"Name | payload_hex\". Geräteklassen-Überschreibung: eine Zeile je Kanal als \"Kanalname = awning\" (optional).",
+        "description": "Presets: eine Zeile je Preset als \"Name | payload_hex\". Geräteklasse und Positions-Invertierung: eine Zeile je Kanal, z. B. \"Kanalname = awning\" bzw. \"Kanalname = false\" (optional; Markisen werden standardmäßig nicht invertiert).",
         "data": {
           "update_interval": "Aktualisierungsintervall (Sekunden)",
           "presets": "Presets (Name | payload_hex)",
-          "device_classes": "Geräteklassen-Überschreibung (Kanal = Klasse)"
+          "device_classes": "Geräteklassen-Überschreibung (Kanal = Klasse)",
+          "invert": "Position invertieren (Kanal = true/false)"
         }
       }
     },
     "error": {
       "invalid_preset": "Jede Preset-Zeile muss \"Name | payload_hex\" sein, payload_hex mit gerader Länge in Hex."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "awning_status": {
+        "name": "Status",
+        "state": {
+          "retracted": "Eingefahren",
+          "extended": "Ausgefahren",
+          "retracting": "Fährt ein",
+          "extending": "Fährt aus",
+          "partial": "Teilweise ausgefahren"
+        }
+      }
     }
   }
 }

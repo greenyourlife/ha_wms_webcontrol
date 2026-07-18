@@ -22,16 +22,31 @@
     "step": {
       "init": {
         "title": "WAREMA WMS WebControl options",
-        "description": "Presets: one per line as \"Name | payload_hex\". Device class overrides: one per line as \"channel name = awning\" (optional).",
+        "description": "Presets: one per line as \"Name | payload_hex\". Device class overrides and position inversion: one line per channel, e.g. \"channel name = awning\" resp. \"channel name = false\" (optional; awnings are not inverted by default).",
         "data": {
           "update_interval": "Update interval (seconds)",
           "presets": "Presets (Name | payload_hex)",
-          "device_classes": "Device class overrides (channel = class)"
+          "device_classes": "Device class overrides (channel = class)",
+          "invert": "Invert position (channel = true/false)"
         }
       }
     },
     "error": {
       "invalid_preset": "Each preset line must be \"Name | payload_hex\" with an even-length hex payload."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "awning_status": {
+        "name": "Status",
+        "state": {
+          "retracted": "Retracted",
+          "extended": "Extended",
+          "retracting": "Retracting",
+          "extending": "Extending",
+          "partial": "Partially extended"
+        }
+      }
     }
   }
 }
