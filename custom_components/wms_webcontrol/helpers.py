@@ -56,41 +56,38 @@ def resolved_device_class(
     return guess_device_class(channel_name)
 
 
-def resolve_invert(channel_name: str, device_class: str, override: dict[str, bool]) -> bool:
+def resolve_invert(channel_name: str, override: dict[str, bool]) -> bool:
     """Decide whether a channel's position should be inverted.
 
-    Per-channel overrides win; otherwise awnings are not inverted (HA awning
-    convention: ``open`` = extended, ``closed`` = retracted) while everything
-    else is inverted (library ``0 = open`` vs HA ``100 = open``).
+    All channels are inverted by default (library ``0 = open`` vs HA
+    ``100 = open``); for awnings this means HA ``100 %`` = extended = library
+    ``0``. Per-channel overrides win for the rare device that reports the other
+    way round.
     """
-    key = (channel_name or "").lower()
-    if key in override:
-        return override[key]
-    return device_class != "awning"
+    return (override or {}).get((channel_name or "").lower(), True)
 
 
 def awning_state(
-    lib_position: Optional[float],
+    ha_position: Optional[int],
     is_moving: bool,
-    target_lib: Optional[int],
+    target_ha: Optional[int],
 ) -> Optional[str]:
-    """Map an awning's physical (library) position/movement to a status key.
+    """Map an awning's HA position/movement to a status option key.
 
-    Works in library space so the wording stays physically correct regardless
-    of how the Home Assistant percentage is oriented:
-    ``retracted`` = eingefahren (library 0), ``extended`` = ausgefahren
-    (library 100).
+    In HA space (as anchored by the cover): ``extended`` = ausgefahren (HA 100),
+    ``retracted`` = eingefahren (HA 0). Since the sensor and the cover share the
+    same inversion, the wording stays consistent with the cover state.
     """
-    if is_moving and target_lib is not None and lib_position is not None:
-        if target_lib > lib_position:
+    if is_moving and target_ha is not None and ha_position is not None:
+        if target_ha > ha_position:
             return "extending"
-        if target_lib < lib_position:
+        if target_ha < ha_position:
             return "retracting"
-    if lib_position is None:
+    if ha_position is None:
         return None
-    if lib_position >= 100:
+    if ha_position >= 100:
         return "extended"
-    if lib_position <= 0:
+    if ha_position <= 0:
         return "retracted"
     return "partial"
 

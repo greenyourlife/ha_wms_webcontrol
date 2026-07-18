@@ -33,7 +33,7 @@ async def async_setup_entry(
         )
         if device_class != CoverDeviceClass.AWNING.value:
             continue
-        invert = helpers.resolve_invert(info.channel_name, device_class, invert_overrides)
+        invert = helpers.resolve_invert(info.channel_name, invert_overrides)
         entities.append(WmsAwningStatus(coordinator, entry, key, info, invert))
     async_add_entities(entities)
 
@@ -81,12 +81,11 @@ class WmsAwningStatus(CoordinatorEntity[WmsWebControlCoordinator], SensorEntity)
 
     @property
     def native_value(self) -> str | None:
-        """Return the current status option key (physical, library space)."""
+        """Return the current status option key."""
         info = self._info
         if info is None:
             return None
-        target_ha = self.coordinator.targets.get(self._key)
-        target_lib = (
-            helpers.lib_from_ha(target_ha, self._invert) if target_ha is not None else None
+        ha_position = helpers.ha_from_lib(info.position, self._invert)
+        return helpers.awning_state(
+            ha_position, info.is_moving, self.coordinator.targets.get(self._key)
         )
-        return helpers.awning_state(info.position, info.is_moving, target_lib)

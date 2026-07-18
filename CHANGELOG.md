@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1 – 2026-07-19
+
+- **Markisen-Invertierung korrigiert:** Markisen werden jetzt wie alle anderen
+  Behänge invertiert (HA `100 % = ausgefahren` = Library-Position 0, HA `0 %` =
+  eingefahren → „Geschlossen"). Die in 0.2.0 eingeführte Ausnahme drehte den
+  Positions-Schieber und die Positions-Buttons falschherum.
+- Status-Sensor wieder im HA-Raum – bleibt konsistent mit dem Cover-Zustand.
+- Weiterhin pro Kanal über die Option „Position invertieren" umstellbar.
+
 ## 0.2.0 – 2026-07-18
 
 - **Markisen-Semantik korrigiert:** Position wird für `awning`-Kanäle nicht mehr

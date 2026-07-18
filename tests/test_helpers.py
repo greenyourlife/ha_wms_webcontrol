@@ -77,15 +77,15 @@ def test_lib_from_ha(ha, invert, expected_lib):
     assert helpers.lib_from_ha(ha, invert) == expected_lib
 
 
-def test_resolve_invert_defaults():
-    # Awnings are not inverted; everything else is.
-    assert helpers.resolve_invert("Markise", "awning", {}) is False
-    assert helpers.resolve_invert("Rollo", "shutter", {}) is True
+def test_resolve_invert_defaults_true():
+    # All channels are inverted by default (HA 100 % = library 0 = extended).
+    assert helpers.resolve_invert("Markise", {}) is True
+    assert helpers.resolve_invert("Rollo", {}) is True
 
 
 def test_resolve_invert_override_wins():
-    assert helpers.resolve_invert("Markise", "awning", {"markise": True}) is True
-    assert helpers.resolve_invert("Rollo", "shutter", {"rollo": False}) is False
+    assert helpers.resolve_invert("Markise", {"markise": False}) is False
+    assert helpers.resolve_invert("Rollo", {"rollo": False}) is False
 
 
 def test_resolved_device_class():
@@ -100,21 +100,21 @@ def test_resolved_device_class():
 # --- Awning status wording --------------------------------------------------
 
 
-# awning_state works in library (physical) space: lib 0 = eingefahren,
-# lib 100 = ausgefahren — independent of the HA percentage orientation.
+# awning_state works in HA space (shared with the cover): HA 0 = eingefahren,
+# HA 100 = ausgefahren.
 @pytest.mark.parametrize(
-    ("lib_position", "is_moving", "target_lib", "expected"),
+    ("ha_position", "is_moving", "target_ha", "expected"),
     [
-        (0, False, None, "retracted"),      # library 0 -> eingefahren
-        (100, False, None, "extended"),     # library 100 -> ausgefahren
+        (0, False, None, "retracted"),      # HA 0 -> eingefahren
+        (100, False, None, "extended"),     # HA 100 -> ausgefahren
         (40, False, None, "partial"),       # in between
-        (30, True, 100, "extending"),       # moving towards library 100 -> fährt aus
-        (80, True, 0, "retracting"),        # moving towards library 0 -> fährt ein
+        (30, True, 100, "extending"),       # moving towards HA 100 -> fährt aus
+        (80, True, 0, "retracting"),        # moving towards HA 0 -> fährt ein
         (None, False, None, None),          # unknown position
     ],
 )
-def test_awning_state(lib_position, is_moving, target_lib, expected):
-    assert helpers.awning_state(lib_position, is_moving, target_lib) == expected
+def test_awning_state(ha_position, is_moving, target_ha, expected):
+    assert helpers.awning_state(ha_position, is_moving, target_ha) == expected
 
 
 # --- Boolean override parsing ----------------------------------------------
