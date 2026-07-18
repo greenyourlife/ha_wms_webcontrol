@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "WAREMA WMS WebControl",
-        "description": "Enter the address of your local WebControl box. The box must be reachable directly (e.g. http://webcontrol.local or http://10.1.5.17).",
+        "description": "Enter the address of your local WebControl box. The box must be reachable directly (e.g. http://webcontrol.local or its IP address).",
         "data": {
           "url": "WebControl URL",
           "update_interval": "Update interval (seconds)"

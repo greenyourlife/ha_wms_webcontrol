@@ -51,8 +51,8 @@ Ordner `custom_components/wms_webcontrol/` in das HA-Config-Verzeichnis kopieren
 **Einstellungen → Geräte & Dienste → Integration hinzufügen → „WAREMA WMS WebControl"**
 
 - **WebControl-URL**: Adresse der lokalen Box, z. B. `http://webcontrol.local`
-  oder `http://10.1.5.17`. Die Verbindung (inkl. Auto-Discovery) wird im Dialog
-  getestet.
+  oder die IP der Box im eigenen Netz (z. B. `http://192.0.2.17`). Die Verbindung
+  (inkl. Auto-Discovery) wird im Dialog getestet.
 - **Aktualisierungsintervall**: Standard `600` s.
 
 ### Optionen (nachträglich änderbar)
@@ -84,10 +84,10 @@ ersten vier Zeichen (`90` + zweistelliger Counter) entfernen – der Rest ist di
 
 ## Verifikation am Gerät
 
-1. **Lokale Erreichbarkeit prüfen** (die Box wurde bisher evtl. nur über die Cloud
-   `wms.4square.cloud` angesprochen):
+1. **Lokale Erreichbarkeit prüfen** (falls die Box bisher nur über die
+   WAREMA-Cloud angesprochen wurde):
    ```
-   curl "http://10.1.5.17/protocol.xml?protocol=900323&_=1"
+   curl "http://<box-ip>/protocol.xml?protocol=900323&_=1"
    ```
    Es muss XML zurückkommen (kein Timeout / kein Cloud-Redirect).
 2. Integration einrichten und prüfen, dass Kanäle als Cover-Entities erscheinen.
