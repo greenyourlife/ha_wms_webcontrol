@@ -15,6 +15,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from . import helpers
 from .const import (
+    CONF_EXCLUDE_CHANNELS,
     CONF_UPDATE_INTERVAL,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
@@ -86,12 +87,23 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
     def _connect(self) -> None:
         """Blocking connect + discovery. Runs in the executor."""
         self.controller = WmsController(self.url)
-        self.shades = Shade.get_all_shades(
+        shades = Shade.get_all_shades(
             self.controller,
             time_between_cmds=TIME_BETWEEN_CMDS,
             num_retries=SHADE_NUM_RETRIES,
         )
-        LOGGER.debug("Discovered %d shade(s) on %s", len(self.shades), self.url)
+        excluded = self.config_entry.options.get(CONF_EXCLUDE_CHANNELS, [])
+        self.shades = [
+            shade
+            for shade in shades
+            if not helpers.is_excluded(shade.get_channel_name(), excluded)
+        ]
+        LOGGER.debug(
+            "Discovered %d shade(s) on %s (%d after exclusions)",
+            len(shades),
+            self.url,
+            len(self.shades),
+        )
 
     async def _async_update_data(self) -> dict[str, ShadeInfo]:
         """Fetch the latest state of all shades."""

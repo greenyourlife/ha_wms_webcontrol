@@ -14,6 +14,7 @@ CONF_UPDATE_INTERVAL: Final = "update_interval"
 CONF_PRESETS: Final = "presets"
 CONF_DEVICE_CLASSES: Final = "device_classes"
 CONF_INVERT: Final = "invert"
+CONF_EXCLUDE_CHANNELS: Final = "exclude_channels"
 
 # Awning status sensor option keys (translated in strings.json).
 AWNING_STATE_RETRACTED: Final = "retracted"

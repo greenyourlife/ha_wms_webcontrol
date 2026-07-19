@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 – 2026-07-19
+
+- **Neue Option „Kanäle ausschließen":** Kanalnamen (eine Zeile je Name) werden
+  nach der Discovery herausgefiltert – so werden in der WMS gespeicherte Szenen,
+  die die Box als eigene „Kanäle" mitliefert, nicht mehr als Cover/Sensor angelegt
+  und auch nicht mehr gepollt (entrümpelt die Entitätenliste, beschleunigt das
+  Polling).
+
 ## 0.2.3 – 2026-07-19
 
 - **Markisen-Prozente korrigiert:** Die Box meldet die eingefahrene Markise als

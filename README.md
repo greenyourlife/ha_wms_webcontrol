@@ -86,6 +86,10 @@ Ordner `custom_components/wms_webcontrol/` in das HA-Config-Verzeichnis kopieren
   `Kanalname = true` oder `= false`. Standard: Markisen `false` (nicht invertiert,
   HA `0 % = eingefahren`), alles andere `true`. Nur nötig, falls ein Behang die
   Positionen andersherum meldet als erwartet.
+- **Kanäle ausschließen** (optional) – ein Kanalname je Zeile. Nützlich, wenn die
+  WMS gespeicherte Szenen als eigene „Kanäle" mitliefert (z. B. `60% raus`,
+  `100 % raus`): Diese werden dann nicht als Cover/Sensor angelegt und nicht
+  gepollt. Die Szenen selbst bleiben als Preset-Buttons verfügbar.
 
 ## Eigene Presets mitschneiden
 

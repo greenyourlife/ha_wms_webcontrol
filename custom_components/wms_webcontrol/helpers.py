@@ -126,6 +126,17 @@ def format_bool_map(mapping: dict[str, bool]) -> str:
     return "\n".join(f"{key} = {str(value).lower()}" for key, value in mapping.items())
 
 
+def parse_lines(text: str) -> list[str]:
+    """Parse a multiline text into a list of trimmed, non-empty lines."""
+    return [line.strip() for line in (text or "").splitlines() if line.strip()]
+
+
+def is_excluded(channel_name: str, excluded: list[str]) -> bool:
+    """Return whether a channel name is in the exclude list (case-insensitive)."""
+    name = (channel_name or "").strip().lower()
+    return name in {entry.strip().lower() for entry in (excluded or [])}
+
+
 def derive_movement(
     is_moving: bool,
     target_ha: Optional[int],

@@ -134,6 +134,28 @@ def test_format_bool_map_roundtrips():
     assert helpers.parse_bool_map(helpers.format_bool_map(mapping)) == mapping
 
 
+# --- Channel exclusion ------------------------------------------------------
+
+
+def test_parse_lines():
+    text = "60% raus\n  100 % raus  \n\nMarkise einfahren\n"
+    assert helpers.parse_lines(text) == ["60% raus", "100 % raus", "Markise einfahren"]
+
+
+@pytest.mark.parametrize(
+    ("channel", "excluded", "expected"),
+    [
+        ("60% raus", ["60% raus", "100 % raus"], True),
+        ("100 % raus", ["60% raus", "100 % raus"], True),
+        ("Markise", ["60% raus", "100 % raus"], False),
+        ("markise", ["Markise"], True),  # case-insensitive
+        ("Markise", [], False),
+    ],
+)
+def test_is_excluded(channel, excluded, expected):
+    assert helpers.is_excluded(channel, excluded) is expected
+
+
 # --- Movement / state derivation -------------------------------------------
 
 

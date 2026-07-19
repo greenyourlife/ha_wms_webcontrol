@@ -27,6 +27,7 @@ from homeassistant.helpers.selector import (
 from . import helpers
 from .const import (
     CONF_DEVICE_CLASSES,
+    CONF_EXCLUDE_CHANNELS,
     CONF_INVERT,
     CONF_PRESETS,
     CONF_UPDATE_INTERVAL,
@@ -135,6 +136,9 @@ class WmsOptionsFlow(OptionsFlow):
                         CONF_INVERT: helpers.parse_bool_map(
                             user_input.get(CONF_INVERT, "")
                         ),
+                        CONF_EXCLUDE_CHANNELS: helpers.parse_lines(
+                            user_input.get(CONF_EXCLUDE_CHANNELS, "")
+                        ),
                     },
                 )
 
@@ -145,6 +149,7 @@ class WmsOptionsFlow(OptionsFlow):
             options.get(CONF_DEVICE_CLASSES, {})
         )
         invert_default = helpers.format_bool_map(options.get(CONF_INVERT, {}))
+        exclude_default = "\n".join(options.get(CONF_EXCLUDE_CHANNELS, []))
         schema = vol.Schema(
             {
                 vol.Required(
@@ -159,6 +164,9 @@ class WmsOptionsFlow(OptionsFlow):
                 ): _MULTILINE_TEXT,
                 vol.Optional(
                     CONF_INVERT, default=invert_default
+                ): _MULTILINE_TEXT,
+                vol.Optional(
+                    CONF_EXCLUDE_CHANNELS, default=exclude_default
                 ): _MULTILINE_TEXT,
             }
         )

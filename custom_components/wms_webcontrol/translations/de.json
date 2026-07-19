@@ -27,7 +27,8 @@
           "update_interval": "Aktualisierungsintervall (Sekunden)",
           "presets": "Presets (Name | payload_hex)",
           "device_classes": "Geräteklassen-Überschreibung (Kanal = Klasse)",
-          "invert": "Position invertieren (Kanal = true/false)"
+          "invert": "Position invertieren (Kanal = true/false)",
+          "exclude_channels": "Kanäle ausschließen (ein Kanalname pro Zeile)"
         }
       }
     },
