@@ -77,15 +77,15 @@ def test_lib_from_ha(ha, invert, expected_lib):
     assert helpers.lib_from_ha(ha, invert) == expected_lib
 
 
-def test_resolve_invert_defaults_true():
-    # All channels are inverted by default (HA 100 % = library 0 = extended).
-    assert helpers.resolve_invert("Markise", {}) is True
-    assert helpers.resolve_invert("Rollo", {}) is True
+def test_resolve_invert_defaults():
+    # Awnings are NOT inverted (HA 0 % = eingefahren = library 0); others are.
+    assert helpers.resolve_invert("Markise", "awning", {}) is False
+    assert helpers.resolve_invert("Rollo", "shutter", {}) is True
 
 
 def test_resolve_invert_override_wins():
-    assert helpers.resolve_invert("Markise", {"markise": False}) is False
-    assert helpers.resolve_invert("Rollo", {"rollo": False}) is False
+    assert helpers.resolve_invert("Markise", "awning", {"markise": True}) is True
+    assert helpers.resolve_invert("Rollo", "shutter", {"rollo": False}) is False
 
 
 def test_resolved_device_class():

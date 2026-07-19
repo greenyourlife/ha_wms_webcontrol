@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.3 – 2026-07-19
+
+- **Markisen-Prozente korrigiert:** Die Box meldet die eingefahrene Markise als
+  Library-Position 0. Markisen werden daher wieder **nicht** invertiert, sodass
+  eingefahren = HA `0 %` (= „Geschlossen") und ausgefahren = HA `100 %`. Der
+  Flip in 0.2.1 auf „invertiert" war falsch (er zeigte eingefahren als `100 %`);
+  Ursache der damaligen Fehldiagnose war der zeitgleiche Fahr-Bug, nicht die
+  Anzeige-Richtung.
+
 ## 0.2.2 – 2026-07-19
 
 - **Regression behoben: Behänge fuhren nicht mehr.** Der in „Fahrbefehle

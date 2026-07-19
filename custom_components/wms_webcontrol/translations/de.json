@@ -22,7 +22,7 @@
     "step": {
       "init": {
         "title": "WAREMA WMS WebControl – Optionen",
-        "description": "Presets: eine Zeile je Preset als \"Name | payload_hex\". Geräteklasse und Positions-Invertierung: eine Zeile je Kanal, z. B. \"Kanalname = awning\" bzw. \"Kanalname = false\" (optional; alle Kanäle sind standardmäßig invertiert, HA 100 % = offen).",
+        "description": "Presets: eine Zeile je Preset als \"Name | payload_hex\". Geräteklasse und Positions-Invertierung: eine Zeile je Kanal, z. B. \"Kanalname = awning\" bzw. \"Kanalname = false\" (optional; Markisen sind standardmäßig nicht invertiert, HA 0 % = eingefahren).",
         "data": {
           "update_interval": "Aktualisierungsintervall (Sekunden)",
           "presets": "Presets (Name | payload_hex)",

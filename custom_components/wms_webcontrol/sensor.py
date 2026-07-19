@@ -33,7 +33,7 @@ async def async_setup_entry(
         )
         if device_class != CoverDeviceClass.AWNING.value:
             continue
-        invert = helpers.resolve_invert(info.channel_name, invert_overrides)
+        invert = helpers.resolve_invert(info.channel_name, device_class, invert_overrides)
         entities.append(WmsAwningStatus(coordinator, entry, key, info, invert))
     async_add_entities(entities)
 

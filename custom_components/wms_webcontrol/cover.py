@@ -67,7 +67,9 @@ class WmsCover(CoordinatorEntity[WmsWebControlCoordinator], CoverEntity):
             info.channel_name, dc_overrides, _VALID_DEVICE_CLASSES
         )
         self._attr_device_class = CoverDeviceClass(device_class)
-        self._invert = helpers.resolve_invert(info.channel_name, invert_overrides)
+        self._invert = helpers.resolve_invert(
+            info.channel_name, device_class, invert_overrides
+        )
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name="WAREMA WMS WebControl",

@@ -56,15 +56,19 @@ def resolved_device_class(
     return guess_device_class(channel_name)
 
 
-def resolve_invert(channel_name: str, override: dict[str, bool]) -> bool:
+def resolve_invert(channel_name: str, device_class: str, override: dict[str, bool]) -> bool:
     """Decide whether a channel's position should be inverted.
 
-    All channels are inverted by default (library ``0 = open`` vs HA
-    ``100 = open``); for awnings this means HA ``100 %`` = extended = library
-    ``0``. Per-channel overrides win for the rare device that reports the other
-    way round.
+    Shutters/blinds are inverted (library ``0 = open`` vs HA ``100 = open``).
+    Awnings are NOT inverted: the box reports a retracted awning as library ``0``,
+    which we map straight through to HA ``0 %`` = „eingefahren" = closed (and
+    HA ``100 %`` = fully extended). Per-channel overrides win for the rare device
+    that reports the other way round.
     """
-    return (override or {}).get((channel_name or "").lower(), True)
+    key = (channel_name or "").lower()
+    if key in (override or {}):
+        return override[key]
+    return device_class != "awning"
 
 
 def awning_state(

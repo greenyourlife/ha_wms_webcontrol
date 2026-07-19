@@ -19,10 +19,12 @@ Die Integration nutzt die PyPI-Library
 ## Funktionsumfang
 
 - **Cover-Entity je entdecktem Kanal** mit `OPEN`, `CLOSE`, `SET_POSITION`.
-  - Position wird gegenüber der Box invertiert: HA `100 % = offen`,
-    Library `0 = offen`. Für Markisen bedeutet das HA `100 % = ausgefahren`
-    (= Library-Position 0), HA `0 % = eingefahren` → Zustand „Geschlossen".
-    Pro Kanal überschreibbar, falls ein Behang andersherum meldet (siehe Optionen).
+  - Rollos/Raffstores: Position wird gegenüber der Box invertiert
+    (HA `100 % = offen`, Library `0 = offen`).
+  - Markisen (`awning`): Position wird **nicht** invertiert. Die Box meldet die
+    eingefahrene Markise als Library-Position 0 → HA `0 %` = eingefahren →
+    Zustand „Geschlossen"; HA `100 %` = voll ausgefahren. Pro Kanal überschreibbar
+    (siehe Optionen), falls ein Behang andersherum meldet.
   - `is_opening` / `is_closing` werden aus dem Bewegungsstatus und der zuletzt
     kommandierten Zielposition abgeleitet.
   - Geräteklasse: Markisen → `awning`, sonst `shutter` (per Name-Heuristik,
@@ -81,9 +83,9 @@ Ordner `custom_components/wms_webcontrol/` in das HA-Config-Verzeichnis kopieren
 - **Geräteklassen-Überschreibung** (optional) – eine Zeile je Kanal im Format
   `Kanalname = awning` (oder `shutter`, `blind`, `curtain`, `shade`, …).
 - **Position invertieren** (optional) – eine Zeile je Kanal im Format
-  `Kanalname = true` oder `= false`. Standard für alle Kanäle: `true`
-  (HA `100 % = offen/ausgefahren`). Nur nötig, falls ein Behang die Positionen
-  andersherum meldet als erwartet – dann `Kanalname = false` setzen.
+  `Kanalname = true` oder `= false`. Standard: Markisen `false` (nicht invertiert,
+  HA `0 % = eingefahren`), alles andere `true`. Nur nötig, falls ein Behang die
+  Positionen andersherum meldet als erwartet.
 
 ## Eigene Presets mitschneiden
 
