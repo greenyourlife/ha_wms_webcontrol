@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import threading
-import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -23,6 +22,7 @@ from .const import (
     FAST_UPDATE_INTERVAL,
     LOGGER,
     NUM_RETRIES,
+    SHADE_NUM_RETRIES,
     TIME_BETWEEN_CMDS,
 )
 
@@ -89,7 +89,7 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
         self.shades = Shade.get_all_shades(
             self.controller,
             time_between_cmds=TIME_BETWEEN_CMDS,
-            num_retries=NUM_RETRIES,
+            num_retries=SHADE_NUM_RETRIES,
         )
         LOGGER.debug("Discovered %d shade(s) on %s", len(self.shades), self.url)
 
@@ -161,27 +161,15 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
         await self.async_request_refresh()
 
     def _move(self, shade: Shade, lib_position: int) -> None:
-        """Send a single move command quickly. Runs in the executor.
+        """Move a shade via the library. Runs in the executor.
 
-        Bypasses the library's verify-and-retry loop (which is slow and re-sends
-        the command when a shade doesn't report position feedback). We send the
-        move once and let the coordinator's fast poll pick up the new state.
-        The wire protocol uses a doubled position value (library convention).
+        Uses the library's ``set_shade_position`` (which correctly gates on the
+        box's "check ready" response before sending the move). The coordinator
+        lock keeps a concurrent poll from making the box busy, and the low
+        per-shade retry count keeps the built-in verify loop short.
         """
-        ctrl = shade.wms_ctrl
-        last_exc: BaseException | None = None
         with self._lock:
-            for attempt in range(NUM_RETRIES):
-                try:
-                    ctrl.send_rx_check_ready(shade.room.id, shade.channel.id)
-                    time.sleep(TIME_BETWEEN_CMDS)
-                    ctrl.send_tx_move_shade(shade.room.id, shade.channel.id, lib_position * 2)
-                    return
-                except TRANSPORT_ERRORS as err:
-                    last_exc = err
-                    time.sleep(TIME_BETWEEN_CMDS)
-            if last_exc is not None:
-                raise last_exc
+            shade.set_shade_position(lib_position)
 
     async def async_send_raw(self, payload_hex: str) -> None:
         """Replay a raw preset payload verbatim."""

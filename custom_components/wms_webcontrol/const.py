@@ -43,6 +43,11 @@ MIN_UPDATE_INTERVAL: Final = 30  # seconds
 # the actual command. 0.5s has proven reliable over the local network.
 TIME_BETWEEN_CMDS: Final = 0.5
 NUM_RETRIES: Final = 3
+# Retries the library uses per shade for moves and state reads. Kept low so a
+# move doesn't churn through the slow verify loop, but >1 so the box's
+# "check ready" gate still gets a second chance. The coordinator lock already
+# prevents a concurrent poll from making the box busy.
+SHADE_NUM_RETRIES: Final = 2
 
 # After a move the box keeps reporting "not moving" for a short while, so poll
 # more often for a couple of seconds to catch the shade settling on its target.

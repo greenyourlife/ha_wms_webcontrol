@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.2 – 2026-07-19
+
+- **Regression behoben: Behänge fuhren nicht mehr.** Der in „Fahrbefehle
+  beschleunigen" eingeführte, schlanke Fahrweg übersprang die „check ready"-
+  Prüfung der Box – dadurch verwarf die Box den Fahrbefehl. Es wird wieder die
+  bewährte Library-Methode `set_shade_position` verwendet, jetzt mit dem
+  Coordinator-Lock (keine Poll-Kollision) und reduzierten Retries
+  (`SHADE_NUM_RETRIES = 2`), was die ursprüngliche ~30 s-Verzögerung kürzt.
+
 ## 0.2.1 – 2026-07-19
 
 - **Markisen-Invertierung korrigiert:** Markisen werden jetzt wie alle anderen
