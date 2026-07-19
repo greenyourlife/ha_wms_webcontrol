@@ -131,10 +131,19 @@ def parse_lines(text: str) -> list[str]:
     return [line.strip() for line in (text or "").splitlines() if line.strip()]
 
 
+def _normalize_channel(name: str) -> str:
+    """Normalise a channel name for matching: drop all whitespace, lower-case."""
+    return "".join((name or "").split()).lower()
+
+
 def is_excluded(channel_name: str, excluded: list[str]) -> bool:
-    """Return whether a channel name is in the exclude list (case-insensitive)."""
-    name = (channel_name or "").strip().lower()
-    return name in {entry.strip().lower() for entry in (excluded or [])}
+    """Return whether a channel name is in the exclude list.
+
+    Matching ignores case and whitespace, so ``60% raus`` and ``60 % raus`` are
+    treated the same.
+    """
+    target = _normalize_channel(channel_name)
+    return target in {_normalize_channel(entry) for entry in (excluded or [])}
 
 
 def derive_movement(

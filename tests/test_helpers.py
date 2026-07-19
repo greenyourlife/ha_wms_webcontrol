@@ -149,6 +149,7 @@ def test_parse_lines():
         ("100 % raus", ["60% raus", "100 % raus"], True),
         ("Markise", ["60% raus", "100 % raus"], False),
         ("markise", ["Markise"], True),  # case-insensitive
+        ("60% raus", ["60 % raus"], True),  # whitespace-insensitive
         ("Markise", [], False),
     ],
 )
