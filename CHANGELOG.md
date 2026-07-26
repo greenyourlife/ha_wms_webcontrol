@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 – 2026-07-26
+
+- **Preset-Buttons müssen nicht mehr doppelt gedrückt werden.** `send_raw`
+  wertete die „check ready"-Antwort der Box nicht aus und sendete das
+  Szenen-Kommando auch dann, wenn die Box gerade „nicht bereit" (`feedback=0`)
+  meldete – die Box verwarf es dann still. Jetzt wird wie beim Fahren gewartet,
+  bis die Box bereit ist, bevor das Kommando rausgeht.
+
 ## 0.3.0 – 2026-07-19
 
 - **Neue Option „Kanäle ausschließen":** Kanalnamen (eine Zeile je Name) werden

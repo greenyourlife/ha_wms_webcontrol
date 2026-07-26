@@ -268,6 +268,34 @@ def test_send_raw_replays_payload_verbatim():
     ]
 
 
+def test_send_raw_waits_until_box_is_ready():
+    """The command must not be sent while the box reports feedback=0 (busy)."""
+    import xml.etree.ElementTree as ET
+
+    class _ReadyController:
+        def __init__(self, feedbacks):
+            self._feedbacks = list(feedbacks)
+            self.calls: list[tuple[str, object]] = []
+
+        def send_rx_check_ready(self):
+            fb = self._feedbacks.pop(0) if self._feedbacks else "1"
+            self.calls.append(("check_ready", fb))
+            return ET.fromstring(f"<r><feedback>{fb}</feedback></r>")
+
+        def _send_command(self, cmd, additional_str=""):
+            self.calls.append(("send_command", cmd))
+
+    controller = _ReadyController(["0", "0", "1"])  # busy, busy, ready
+    helpers.send_raw(controller, "0821000308ffffffff", sleep=lambda _s: None)
+    # Polls check-ready until ready, then sends the command exactly once.
+    assert [kind for kind, _ in controller.calls] == [
+        "check_ready",
+        "check_ready",
+        "check_ready",
+        "send_command",
+    ]
+
+
 def test_send_raw_retries_then_raises():
     class _Boom:
         def __init__(self):

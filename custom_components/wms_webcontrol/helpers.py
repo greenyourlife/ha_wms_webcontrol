@@ -240,6 +240,23 @@ def format_device_classes_text(mapping: dict[str, str]) -> str:
     return "\n".join(f"{key} = {value}" for key, value in mapping.items())
 
 
+def _await_ready(controller, tries: int, wait: float, sleep: Callable[[float], None]) -> None:
+    """Poll check-ready until the box reports ready, then return.
+
+    The WebControl server answers a "check ready" request with a ``feedback``
+    value: ``1`` (or no feedback element) means ready, ``0`` means busy. If a
+    command is sent while the box is busy, it is silently dropped — which is why
+    a single un-checked check-ready made preset presses need a second tap. This
+    mirrors the library's ``_try_cmd_n_times`` gating used for moves.
+    """
+    for _ in range(max(1, tries)):
+        resp = controller.send_rx_check_ready()
+        feedback = resp.find("feedback") if resp is not None else None
+        if feedback is None or feedback.text == "1":
+            return
+        sleep(wait)
+
+
 def send_raw(
     controller,
     payload_hex: str,
@@ -252,8 +269,8 @@ def send_raw(
 ) -> None:
     """Replay a raw protocol payload via the controller.
 
-    Mirrors the ordering used for moves: an optional check-ready request, a
-    short wait, then the command. ``controller._send_command`` prepends the
+    Mirrors the ordering used for moves: wait until the box reports ready, a
+    short pause, then the command. ``controller._send_command`` prepends the
     ``90<counter>`` prefix and the ``_`` timestamp automatically, so the payload
     is sent verbatim otherwise. Retries the whole sequence on transport errors.
     """
@@ -261,7 +278,7 @@ def send_raw(
     for _ in range(max(1, retries)):
         try:
             if check_ready:
-                controller.send_rx_check_ready()
+                _await_ready(controller, retries, wait, sleep)
                 sleep(wait)
             controller._send_command(payload_hex)  # noqa: SLF001 - intended raw path
             return
