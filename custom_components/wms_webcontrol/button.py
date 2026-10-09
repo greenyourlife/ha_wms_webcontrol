@@ -43,8 +43,9 @@ async def async_setup_entry(
         if is_valid_payload(payload):
             entities.append(WmsPresetButton(coordinator, entry, preset[PRESET_NAME], payload))
 
+    single_product = len(coordinator.products) == 1
     for channel in coordinator.products:
-        entities.append(WmsWinkButton(coordinator, entry, channel))
+        entities.append(WmsWinkButton(coordinator, entry, channel, single_product))
 
     async_add_entities(entities)
 
@@ -126,11 +127,14 @@ class WmsWinkButton(_WmsButton):
         coordinator: WmsWebControlCoordinator,
         entry: WmsConfigEntry,
         channel: ChannelInfo,
+        single_product: bool = False,
     ) -> None:
         """Initialise the wink button."""
         super().__init__(coordinator, entry)
         self._key = channel.key
-        self._attr_name = f"{channel.name} winken"
+        # With one shade the channel name adds nothing and doubles up when the
+        # device is named after the shade ("Markise Markise winken").
+        self._attr_name = "Winken" if single_product else f"{channel.name} winken"
         self._attr_unique_id = f"{entry.entry_id}_{channel.key}_wink"
 
     async def async_press(self) -> None:
