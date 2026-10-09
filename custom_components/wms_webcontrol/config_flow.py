@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import requests
 import voluptuous as vol
-from warema_wms import WmsController
 
 from homeassistant.config_entries import (
     ConfigFlow,
@@ -25,6 +23,7 @@ from homeassistant.helpers.selector import (
 )
 
 from . import helpers
+from .client import WmsClient, WmsError
 from .const import (
     CONF_DEVICE_CLASSES,
     CONF_EXCLUDE_CHANNELS,
@@ -37,7 +36,7 @@ from .const import (
     DOMAIN,
     MIN_UPDATE_INTERVAL,
 )
-from .coordinator import WmsConfigEntry
+from .coordinator import WmsConfigEntry, make_fetch
 
 _INTERVAL_SELECTOR = NumberSelector(
     NumberSelectorConfig(min=MIN_UPDATE_INTERVAL, max=86400, step=1, mode=NumberSelectorMode.BOX)
@@ -47,9 +46,9 @@ _MULTILINE_TEXT = TextSelector(
 )
 
 
-def _validate_connection(url: str) -> None:
-    """Blocking connection test via auto-discovery. Runs in the executor."""
-    WmsController(url)
+async def _validate_connection(hass, url: str) -> None:
+    """Connection test: read the first room of the box."""
+    await WmsClient(make_fetch(hass, url)).read_room(0)
 
 
 class WmsConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -67,8 +66,8 @@ class WmsConfigFlow(ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(url)
             self._abort_if_unique_id_configured()
             try:
-                await self.hass.async_add_executor_job(_validate_connection, url)
-            except (requests.RequestException, OSError, ValueError):
+                await _validate_connection(self.hass, url)
+            except WmsError:
                 errors["base"] = "cannot_connect"
             except Exception:  # noqa: BLE001 - surface unexpected failures gently
                 errors["base"] = "unknown"

@@ -1,13 +1,14 @@
 {
   "domain": "wms_webcontrol",
   "name": "WAREMA WMS WebControl",
-  "codeowners": ["@greenyourlife"],
+  "codeowners": [
+    "@greenyourlife"
+  ],
   "config_flow": true,
   "documentation": "https://github.com/greenyourlife/ha_wms_webcontrol",
   "integration_type": "hub",
   "iot_class": "local_polling",
-  "loggers": ["warema_wms"],
   "issue_tracker": "https://github.com/greenyourlife/ha_wms_webcontrol/issues",
-  "requirements": ["warema-wms-controller==0.2.4"],
-  "version": "0.3.2"
+  "requirements": [],
+  "version": "0.4.0"
 }
