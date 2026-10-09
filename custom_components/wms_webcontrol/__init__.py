@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import xml.etree.ElementTree as ElemTree
+
 import requests
 
 from homeassistant.const import CONF_URL, Platform
@@ -19,7 +21,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: WmsConfigEntry) -> bool:
 
     try:
         await coordinator.async_setup()
-    except (requests.RequestException, OSError, ValueError) as err:
+    except (
+        requests.RequestException,
+        OSError,
+        ValueError,
+        ElemTree.ParseError,
+        # The library dereferences ``find(...).text`` during discovery; a busy /
+        # errorcode answer therefore surfaces as AttributeError. Retry instead of
+        # failing the entry permanently.
+        AttributeError,
+    ) as err:
         raise ConfigEntryNotReady(
             f"Could not connect to WebControl at {entry.data[CONF_URL]}: {err}"
         ) from err
