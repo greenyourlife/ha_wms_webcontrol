@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.3.2 – unreleased
+
+- **Preset-Buttons prüfen jetzt, ob der Befehl ankommt.** Die Quittung der Box
+  auf das Szenen-Kommando (`feedback`) wird ausgewertet; bei Ablehnung wird
+  erneut gesendet (bis zu 5 Versuche im Abstand von 1 s). Bleibt die Box nach
+  den Ready-Abfragen „busy", wird das Kommando nicht mehr trotzdem gesendet
+  (Lücke in 0.3.1). Hintergrund (Log 2026-10-09): Die Box meldete „bereit",
+  lehnte das folgende Szenen-Kommando aber mit `feedback=0` ab – 0.3.1 hat das
+  ignoriert, die Markise fuhr nicht.
+- **Bewegungskontrolle nach Presets:** Nach dem Senden wird geprüft, ob ein
+  Behang fährt oder seine Position geändert hat. Wenn nicht, wird die Szene
+  einmal erneut gesendet. Erneut gesendet wird nur, wenn sich nachweislich
+  nichts bewegt hat, ein laufender Motor wird also nicht unterbrochen. Keine
+  Bewegung nach allen Versuchen wird als Warnung geloggt (Behang kann bereits
+  in Zielposition sein).
+- **Fehlgeschlagene Presets sind sichtbar:** Nimmt die Box den Befehl nicht an
+  oder ist sie nicht erreichbar, wirft der Button einen `HomeAssistantError`
+  statt still „erfolgreich" zu sein.
+- **Kein veralteter Zustand mehr als „Erfolg":** Das Polling wartet auf „bereit"
+  und wiederholt Abfragen, die die Box mit `errorcode` (z. B. 32 = busy)
+  beantwortet. Vorher übernahm die Library den alten Wert und das Update galt
+  als erfolgreich. Schlagen alle Versuche fehl, schlägt das Update fehl.
+- **Robusteres Setup:** Ungültiges XML und `errorcode`-Antworten während der
+  Discovery führen zu einem erneuten Verbindungsversuch statt zu einem
+  dauerhaften Setup-Fehler.
+- **Debug-Logging umfasst die Library:** `loggers: ["warema_wms"]` im Manifest,
+  damit „Debug-Logging aktivieren" auch Requests/Responses an die Box zeigt.
+- Fahrbefehle über das Cover melden eine nicht bestätigte Fahrt als Warnung im
+  Log (bewusst kein Fehler, damit Wind-/Regen-Skripte nicht abbrechen).
+
 ## 0.3.1 – 2026-07-26
 
 - **Preset-Buttons müssen nicht mehr doppelt gedrückt werden.** `send_raw`
