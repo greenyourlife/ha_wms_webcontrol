@@ -2,8 +2,7 @@
 
 These tests import ``helpers.py`` directly (not through the Home Assistant
 package) so they run on a plain Python interpreter without Home Assistant
-installed. The library ``warema-wms`` is not needed either; a lightweight fake
-controller stands in for the raw-send test.
+installed.
 """
 
 from __future__ import annotations
@@ -242,161 +241,35 @@ def test_parse_device_classes_text():
     }
 
 
-# --- Raw preset send --------------------------------------------------------
-
-import xml.etree.ElementTree as ET  # noqa: E402
-
-
-def _xml(body: str):
-    return ET.fromstring(f"<response>{body}</response>")
-
-
-READY = "<feedback>1</feedback>"
-BUSY = "<feedback>0</feedback>"
-ACK = "<requestid>33</requestid><feedback>1</feedback>"
-NACK = "<requestid>33</requestid><feedback>0</feedback>"
-ERR32 = "<requestid>49</requestid><errorcode>32</errorcode>"
-
-
-class _ScriptedController:
-    """Fake box answering check-ready / command / state from scripted queues."""
-
-    def __init__(self, ready=(), command=(), state=()):
-        self._ready = list(ready)
-        self._command = list(command)
-        self._state = list(state)
-        self.calls: list[str] = []
-
-    def send_rx_check_ready(self, room_id=0, channel_id=0):
-        self.calls.append("check_ready")
-        return _xml(self._ready.pop(0) if self._ready else READY)
-
-    def _send_command(self, cmd, additional_str=""):
-        self.calls.append(f"cmd:{cmd}")
-        return _xml(self._command.pop(0) if self._command else ACK)
-
-    def send_rx_shade_state(self, room_id, channel_id):
-        self.calls.append("state")
-        return _xml(self._state.pop(0))
-
-
-def _no_sleep(_s):
-    return None
-
-
-def test_send_raw_replays_payload_verbatim():
-    controller = _ScriptedController()
-    helpers.send_raw(controller, "0821000308ffffffff", sleep=_no_sleep)
-    assert controller.calls == ["check_ready", "cmd:0821000308ffffffff"]
-
-
-def test_send_raw_waits_until_box_is_ready():
-    """The command must not be sent while the box reports feedback=0 (busy)."""
-    controller = _ScriptedController(ready=[BUSY, BUSY, READY])
-    helpers.send_raw(controller, "0821000308ffffffff", sleep=_no_sleep)
-    assert controller.calls == [
-        "check_ready",
-        "check_ready",
-        "check_ready",
-        "cmd:0821000308ffffffff",
-    ]
-
-
-def test_send_raw_does_not_send_while_box_stays_busy():
-    """Regression: 0.3.1 sent the command anyway after the ready polls ran out."""
-    controller = _ScriptedController(ready=[BUSY] * 9)
-    with pytest.raises(helpers.WmsCommandError, match="busy"):
-        helpers.send_raw(controller, "0821000308ffffffff", retries=3, sleep=_no_sleep)
-    assert not any(call.startswith("cmd:") for call in controller.calls)
-
-
-def test_send_raw_resends_when_box_rejects_command():
-    controller = _ScriptedController(command=[NACK, ACK])
-    helpers.send_raw(controller, "0821000308ffffffff", sleep=_no_sleep)
-    assert controller.calls.count("cmd:0821000308ffffffff") == 2
-
-
-def test_send_raw_ready_then_rejected_is_resent():
-    """Real trace 2026-10-09 07:31:39: ready=1, command feedback=0, box busy."""
-    controller = _ScriptedController(
-        ready=[READY, BUSY, BUSY, BUSY, READY],
-        command=[NACK, ACK],
-    )
-    pauses: list[float] = []
-    helpers.send_raw(
-        controller,
-        "0821000108ffffffff",
-        retries=5,
-        wait=0.5,
-        retry_wait=1.0,
-        sleep=pauses.append,
-    )
-    assert controller.calls.count("cmd:0821000108ffffffff") == 2
-    assert 1.0 in pauses  # generous pause after the rejection
-
-
-def test_send_raw_raises_when_box_always_rejects():
-    controller = _ScriptedController(command=[ERR32] * 3)
-    with pytest.raises(helpers.WmsCommandError, match="errorcode 32"):
-        helpers.send_raw(controller, "0821000308ffffffff", retries=3, sleep=_no_sleep)
-
-
-def test_send_raw_retries_then_raises_transport_error():
-    class _Boom(_ScriptedController):
-        def _send_command(self, cmd, additional_str=""):
-            self.calls.append("cmd")
-            raise ConnectionError("boom")
-
-    boom = _Boom()
-    with pytest.raises(ConnectionError):
-        helpers.send_raw(
-            boom,
-            "0821000308ffffffff",
-            retries=3,
-            sleep=_no_sleep,
-            exceptions=(ConnectionError,),
-        )
-    assert boom.calls.count("cmd") == 3
-
-
-# --- Response / state parsing ----------------------------------------------
+# --- Product types ----------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    ("body", "ok"),
-    [(READY, True), (BUSY, False), (ACK, True), (NACK, False), (ERR32, False)],
+    ("ptype", "expected"),
+    [(3, "awning"), (2, "shutter"), (0, "blind"), (13, "shade"), (22, "awning")],
 )
-def test_response_ok(body, ok):
-    assert helpers.response_ok(_xml(body)) is ok
+def test_device_class_from_product_type(ptype, expected):
+    assert helpers.device_class_for("x", ptype, {}) == expected
 
 
-def test_response_ok_none_is_not_ok():
-    assert helpers.response_ok(None) is False
+def test_device_class_override_and_fallback():
+    valid = {"awning", "shutter", "blind"}
+    assert helpers.device_class_for("Rollo", 3, {"rollo": "shutter"}, valid) == "shutter"
+    assert helpers.device_class_for("Rollo", 3, {"rollo": "bogus"}, valid) == "awning"
+    assert helpers.device_class_for("Markise Süd", None, {}) == "awning"  # name guess
 
 
-def test_parse_shade_state():
-    resp = _xml("<fahrt>1</fahrt><position>120</position>")
-    assert helpers.parse_shade_state(resp) == (60.0, True)
+def test_is_cover_type():
+    assert helpers.is_cover_type(3)
+    assert helpers.is_cover_type(None)
+    assert not helpers.is_cover_type(16)  # Licht schalten
+    assert not helpers.is_cover_type(20)  # Steckdose
 
 
-@pytest.mark.parametrize("body", [ERR32, "<fahrt>0</fahrt>", "<position>x</position><fahrt>0</fahrt>"])
-def test_parse_shade_state_invalid(body):
-    assert helpers.parse_shade_state(_xml(body)) is None
-
-
-def test_read_state_retries_errorcode_instead_of_keeping_stale_value():
-    """Regression: the library logged 'Invalid response' and kept the old state."""
-    controller = _ScriptedController(
-        state=[ERR32, "<fahrt>0</fahrt><position>0</position>"]
-    )
-    assert helpers.read_state(controller, 0, 0, sleep=_no_sleep) == (0.0, False)
-    assert controller.calls.count("state") == 2
-
-
-def test_read_state_raises_after_tries():
-    controller = _ScriptedController(state=[ERR32] * 3)
-    with pytest.raises(helpers.WmsCommandError, match="errorcode 32"):
-        helpers.read_state(controller, 0, 0, tries=3, sleep=_no_sleep)
+def test_volant_parts():
+    assert helpers.VOLANT_PARTS[4] == ("volant1",)
+    assert helpers.VOLANT_PARTS[22] == ("volant1", "volant2")
+    assert 3 not in helpers.VOLANT_PARTS
 
 
 # --- Movement verification --------------------------------------------------

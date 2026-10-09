@@ -1,149 +1,111 @@
 # WAREMA WMS WebControl – Home Assistant Integration
 
-Steuert WAREMA-Behänge (Rollos, Raffstores und – experimentell – Markisen) über
-die **lokale WebControl-Box (non-Pro)**. Neben freier Positionssteuerung werden
-mitgeschnittene **Szenen** als Preset-Buttons abgebildet.
-
-Die Integration nutzt die PyPI-Library
-[`warema-wms-controller`](https://github.com/cornim/wms_webcontrol) als Transport.
+Steuert WAREMA-Behänge (Markisen, Rollläden, Raffstores, Rollos …) über die
+**lokale WMS WebControl-Box (Basic, nicht „pro“)**. Szenen werden aus der Box
+gelesen und als Buttons angelegt.
 
 - Domain: `wms_webcontrol`
 - IoT-Class: `local_polling`
 - Home Assistant: **2026.6.0+**
+- Keine externen Abhängigkeiten. Das Protokoll ist in
+  [`docs/PROTOCOL.md`](docs/PROTOCOL.md) beschrieben (aus der Weboberfläche der
+  Box ausgelesen, keine offizielle WAREMA-Doku).
 
-> **Hinweis zum Paketnamen:** Der Import-Namespace lautet `warema_wms`, das
-> PyPI-Paket heißt jedoch **`warema-wms-controller`** (aktuell `0.2.4`). Das ist
-> in `manifest.json` so hinterlegt; Home Assistant installiert die Abhängigkeit
-> automatisch.
+> Für die **WMS WebControl pro** gibt es die offizielle HA-Integration `wmspro`.
+> Diese Integration hier ist nur für die ältere Box.
 
 ## Funktionsumfang
 
-- **Cover-Entity je entdecktem Kanal** mit `OPEN`, `CLOSE`, `SET_POSITION`.
-  - Rollos/Raffstores: Position wird gegenüber der Box invertiert
-    (HA `100 % = offen`, Library `0 = offen`).
-  - Markisen (`awning`): Position wird **nicht** invertiert. Die Box meldet die
-    eingefahrene Markise als Library-Position 0 → HA `0 %` = eingefahren →
-    Zustand „Geschlossen"; HA `100 %` = voll ausgefahren. Pro Kanal überschreibbar
-    (siehe Optionen), falls ein Behang andersherum meldet.
-  - `is_opening` / `is_closing` werden aus dem Bewegungsstatus und der zuletzt
-    kommandierten Zielposition abgeleitet.
-  - Geräteklasse: Markisen → `awning`, sonst `shutter` (per Name-Heuristik,
-    überschreibbar, siehe unten).
-- **Status-Sensor je Markise** mit Klartext-Zuständen
-  „Eingefahren / Ausgefahren / Fährt ein / Fährt aus / Teilweise ausgefahren"
-  (übersetzt) – gedacht fürs Dashboard, da die HA-Cover-Grundzustände
-  („Offen/Geschlossen") sich nicht pro Entity umbenennen lassen.
-- **Preset-Buttons** für gespeicherte Szenen. Ein Tastendruck spielt die
-  mitgeschnittene Protokoll-Payload 1:1 ab (kein Positions-Parsing).
-- **DataUpdateCoordinator** mit konfigurierbarem Intervall; nach einem Fahrbefehl
-  wird für ~15 s häufiger gepollt, weil die Box „nicht bewegend" verzögert meldet.
-- Blocking I/O der Library läuft ausschließlich im Executor; Netzwerk-Timeouts
-  setzen die Entities auf `unavailable`.
+- **Automatische Erkennung** aller Räume, Behänge und Szenen der Box.
+- **Cover je Behang** mit `OPEN`, `CLOSE`, `SET_POSITION`, `STOP`.
+  - Geräteklasse aus dem Produkttyp der Box (Markise → `awning`, Rollladen →
+    `shutter`, Raffstore → `blind`, …), per Option überschreibbar.
+  - Markisen: HA `0 %` = eingefahren = „Geschlossen“, `100 %` = ausgefahren.
+    Andere Behänge werden invertiert. Pro Kanal überschreibbar.
+  - Markisen mit Volant: zusätzliches Cover je Volant.
+- **Szenen-Buttons** für jede in der Box gespeicherte Szene.
+- **Winken-Button** je Behang (Motor bewegt sich kurz zur Identifikation).
+- **Status-Sensor je Markise** („Eingefahren / Ausgefahren / Fährt ein / …“).
+- **Zuverlässigkeit:**
+  - Jeder Befehl wird von der Box quittiert. „Busy“ → automatisch erneut senden
+    (wie die offizielle Oberfläche). Szenen werden zusätzlich auf Ausführung
+    geprüft. Eine nicht ausgeführte Szene erzeugt eine Fehlermeldung in HA.
+  - Kurze Busy-Phasen beim Polling werden toleriert; erst 3 Fehlschläge in Folge
+    machen die Entities `unavailable` (z. B. wenn die Box hängt).
+  - Fahrbefehle des Covers werfen keinen Fehler, damit Wind-/Regen-Skripte nicht
+    abbrechen. Sie prüfen den Endzustand selbst.
+
+## Sicherheit
+
+Die Integration sendet nur eine fest definierte Liste von Telegrammen
+(`ALLOWED_TELEGRAMS` in `client.py`): Abfragen, Fahren, Stopp, Szene ausführen,
+Winken. **Löschen, Umbenennen, Projekt laden und „Szene lernen“ sind gesperrt**
+und verlassen HA nie, auch nicht über manuell eingetragene Presets.
 
 ## Installation
 
 ### HACS (Custom Repository)
 
-1. HACS → drei Punkte oben rechts → **Custom repositories**.
+1. HACS → drei Punkte oben rechts → **Benutzerdefinierte Repositories**.
 2. Repository: `https://github.com/greenyourlife/ha_wms_webcontrol`,
    Kategorie **Integration**.
-3. „WAREMA WMS WebControl" installieren.
+3. „WAREMA WMS WebControl“ herunterladen.
 4. Home Assistant neu starten.
 
 ### Manuell
 
-Ordner `custom_components/wms_webcontrol/` in das HA-Config-Verzeichnis kopieren
-(`config/custom_components/wms_webcontrol/`) und Home Assistant neu starten.
+Ordner `custom_components/wms_webcontrol/` nach
+`config/custom_components/wms_webcontrol/` kopieren und Home Assistant neu starten.
 
 ## Einrichtung
 
-**Einstellungen → Geräte & Dienste → Integration hinzufügen → „WAREMA WMS WebControl"**
+**Einstellungen → Geräte & Dienste → Integration hinzufügen → „WAREMA WMS WebControl“**
 
-- **WebControl-URL**: Adresse der lokalen Box, z. B. `http://webcontrol.local`
-  oder die IP der Box im eigenen Netz (z. B. `http://192.0.2.17`). Die Verbindung
-  (inkl. Auto-Discovery) wird im Dialog getestet.
-- **Aktualisierungsintervall**: Standard `600` s.
+- **WebControl-URL**, z. B. `http://webcontrol.local` oder `http://<IP der Box>`.
+- **Aktualisierungsintervall**: Standard `600` s. Nach jedem Befehl wird für
+  ~15 s häufiger gepollt.
 
-### Optionen (nachträglich änderbar)
+### Optionen
 
 Über **Konfigurieren** an der Integrationskachel:
 
 - **Aktualisierungsintervall**
-- **Presets** – eine Zeile je Preset im Format `Name | payload_hex`. Vorbelegt mit:
+- **Zusätzliche Presets** (optional) – `Name | payload_hex` je Zeile. Szenen
+  werden automatisch erkannt; ein Preset mit dem Payload einer erkannten Szene
+  ändert nur deren Anzeigenamen. Format eines Szenen-Payloads:
+  `0821 <raum> <kanal> 08ffffffff` (Hex).
+- **Geräteklassen-Überschreibung** (optional) – `Kanalname = awning` je Zeile.
+- **Position invertieren** (optional) – `Kanalname = true/false` je Zeile.
+- **Kanäle ausschließen** (optional) – ein Behang-Name je Zeile. Gilt nur für
+  Behänge; Szenen werden immer als Buttons angelegt.
 
-  | Preset            | payload_hex          |
-  |-------------------|----------------------|
-  | Markise einfahren | `0821000308ffffffff` |
-  | Markise 60 %      | `0821000108ffffffff` |
-  | Markise 100 %     | `0821000208ffffffff` |
+## Upgrade von 0.3.x
 
-  Weitere mitgeschnittene Szenen einfach als zusätzliche Zeile ergänzen. Die
-  Payload ist der reine Protokoll-String **ohne** den variablen `90<counter>`-Prefix
-  (den setzt die Library automatisch). Format der Szenen: `0821 + 00 + <idx> + 08ffffffff`.
-- **Geräteklassen-Überschreibung** (optional) – eine Zeile je Kanal im Format
-  `Kanalname = awning` (oder `shutter`, `blind`, `curtain`, `shade`, …).
-- **Position invertieren** (optional) – eine Zeile je Kanal im Format
-  `Kanalname = true` oder `= false`. Standard: Markisen `false` (nicht invertiert,
-  HA `0 % = eingefahren`), alles andere `true`. Nur nötig, falls ein Behang die
-  Positionen andersherum meldet als erwartet.
-- **Kanäle ausschließen** (optional) – ein Kanalname je Zeile. Nützlich, wenn die
-  WMS gespeicherte Szenen als eigene „Kanäle" mitliefert (z. B. `60% raus`,
-  `100 % raus`): Diese werden dann nicht als Cover/Sensor angelegt und nicht
-  gepollt. Die Szenen selbst bleiben als Preset-Buttons verfügbar.
-
-## Eigene Presets mitschneiden
-
-Die Payload einer gespeicherten Szene lässt sich aus dem Netzwerkverkehr der
-WebControl-Weboberfläche ablesen: Beim Szenen-Recall sendet die App einen
-`GET /protocol.xml?protocol=90XX0821...&_=...`. Aus dem `protocol`-Wert die
-ersten vier Zeichen (`90` + zweistelliger Counter) entfernen – der Rest ist die
-`payload_hex` für ein neues Preset.
-
-## Verifikation am Gerät
-
-1. **Lokale Erreichbarkeit prüfen** (falls die Box bisher nur über die
-   WAREMA-Cloud angesprochen wurde):
-   ```
-   curl "http://<box-ip>/protocol.xml?protocol=900323&_=1"
-   ```
-   Es muss XML zurückkommen (kein Timeout / kein Cloud-Redirect).
-2. Integration einrichten und prüfen, dass Kanäle als Cover-Entities erscheinen.
-3. Eine Cover-Position setzen und beobachten, ob der Behang fährt und die Position
-   nach ~15 s korrekt gemeldet wird.
-4. Preset-Buttons drücken und die Reaktion der Markise prüfen.
+- Entity-IDs bleiben erhalten (gleiche `unique_id`s). Preset-Buttons, deren
+  Payload zu einer Szene der Box passt, werden zu Szenen-Buttons und behalten
+  ihren Namen.
+- Die bisherige Ausschlussliste für Szenen-„Kanäle“ wird nicht mehr gebraucht,
+  stört aber nicht.
+- Neu: `STOP` am Cover, Winken-Buttons.
 
 ## Bekannte Limitierungen
 
-- **Markise experimentell:** Die zugrunde liegende Library wurde nur mit
-  vertikalen Raffstores getestet. Ob die Markise als Kanal erscheint und
-  Position/Fahrt zuverlässig meldet, ist offen. Falls die Markise keine Position
-  liefert, funktionieren die **Preset-Buttons** trotzdem (reiner Szenen-Replay).
-- **Keine STOP-Funktion:** Die Library kennt kein Stopp-Kommando; entsprechend
-  wird `CoverEntityFeature.STOP` nicht angeboten.
-- **Richtungsanzeige bei Fremdsteuerung:** Wird ein Behang per Handsender bewegt,
-  ist die Fahrtrichtung ohne bekanntes Ziel nicht ableitbar; die Entity zeigt dann
-  nur den Positionswechsel, nicht `opening`/`closing`.
-- **Verzögerte Statusmeldung:** Die Box meldet das Ende einer Fahrt verzögert –
-  daher das kurzzeitig schnellere Polling nach jedem Kommando.
+- Licht-, Last- und Steckdosen-Aktoren werden erkannt, aber noch nicht als
+  Entities angelegt.
+- Die gespeicherten **Positionen** einer Szene liegen im Motor und lassen sich
+  nicht auslesen, nur Name und Nummer.
+- Wird ein Behang per Handsender bewegt, ist die Fahrtrichtung nicht ableitbar.
 
 ## Entwicklung / Tests
 
-Framework-freie Kernlogik (Positions-Invertierung, Zustands-Ableitung,
-Preset-Send) liegt in `helpers.py` und ist ohne Home-Assistant-Installation
-testbar:
-
 ```
-python -m pytest tests/test_helpers.py -q
+python -m pytest -q                       # Unit-Tests (ohne Home Assistant)
+pip install pytest-homeassistant-custom-component
+python -m pytest -q                       # zusätzlich tests/ha (HA-Testinstanz)
 ```
 
-Für die vollständige Validierung im HA-Dev-Container:
-
-```
-python -m script.hassfest --integration-path custom_components/wms_webcontrol
-ruff check custom_components/wms_webcontrol
-```
+`tests/ha/fakebox.py` simuliert die Box für die Integrationstests.
 
 ## Lizenz
 
-MIT (siehe `LICENSE`). Die Transport-Library `warema-wms-controller` steht unter
-LGPLv3.
+MIT (siehe `LICENSE`).
