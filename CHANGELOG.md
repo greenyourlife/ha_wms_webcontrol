@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0 – unreleased
+## 0.5.0 – 2026-10-09
 
 - **Zeitschaltuhr lesen:** Neuer Sensor „Nächste Schaltzeit“ je Behang
   (Zeitstempel, Zielposition, kompletter Wochenplan und Ein/Aus als Attribute).
