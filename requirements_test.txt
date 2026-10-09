@@ -1,5 +1,4 @@
-# Tooling for local checks. The helpers tests only need pytest; the optional
-# full HA entity tests need the HA custom-component test harness (Python 3.13).
+# Unit tests (tests/test_*.py) only need pytest.
 pytest>=8
-warema-wms-controller==0.2.4
-# pytest-homeassistant-custom-component  # uncomment for full HA integration tests
+# Optional: full Home Assistant integration tests (tests/ha), Python 3.14.
+# pytest-homeassistant-custom-component

@@ -2,21 +2,29 @@
 
 from __future__ import annotations
 
-import threading
-import time
-import xml.etree.ElementTree as ElemTree
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-import requests
-from warema_wms import Shade, WmsController
+import aiohttp
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from . import helpers
+from .client import (
+    FC_SZENE_AUSFUEHREN,
+    TEL_KANALBEDIENUNG,
+    ChannelInfo,
+    Fetch,
+    WmsClient,
+    WmsConnectionError,
+    WmsError,
+    parse_legacy_payload,
+)
 from .const import (
     CONF_EXCLUDE_CHANNELS,
     CONF_UPDATE_INTERVAL,
@@ -25,42 +33,57 @@ from .const import (
     FAST_UPDATE_DURATION,
     FAST_UPDATE_INTERVAL,
     LOGGER,
-    NUM_RETRIES,
+    MOVE_ATTEMPTS,
     POLL_FAILURE_TOLERANCE,
     POST_COMMAND_SETTLE,
     PRESET_RESENDS,
-    PRESET_RETRY_WAIT,
-    PRESET_SEND_ATTEMPTS,
-    SHADE_NUM_RETRIES,
-    TIME_BETWEEN_CMDS,
+    REQUEST_TIMEOUT,
     VERIFY_READS,
 )
-
-# Transport-level errors that should mark the box as (temporarily) unavailable
-# instead of crashing the integration. ParseError (malformed XML) derives from
-# SyntaxError, not ValueError, so it is listed explicitly.
-TRANSPORT_ERRORS = (requests.RequestException, OSError, ValueError, ElemTree.ParseError)
-# Everything that means "the box did not do what we asked".
-COMMAND_ERRORS = (*TRANSPORT_ERRORS, helpers.WmsCommandError)
 
 type WmsConfigEntry = ConfigEntry["WmsWebControlCoordinator"]
 
 
+def make_fetch(hass: HomeAssistant, base_url: str) -> Fetch:
+    """Return the HTTP transport for the client, using HA's shared session."""
+    session = async_get_clientsession(hass)
+    endpoint = f"{base_url.rstrip('/')}/protocol.xml"
+    timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
+
+    async def fetch(query: str) -> str:
+        try:
+            async with session.get(f"{endpoint}?{query}", timeout=timeout) as resp:
+                resp.raise_for_status()
+                return await resp.text()
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise WmsConnectionError(f"{type(err).__name__}: {err}") from err
+
+    return fetch
+
+
+def lib_position(raw: int | None) -> float | None:
+    """Convert a raw protocol position (0..200) to 0..100 (library semantics)."""
+    return None if raw is None else raw / 2
+
+
 @dataclass(slots=True)
 class ShadeInfo:
-    """Snapshot of a single shade's state (positions in library semantics)."""
+    """Snapshot of a single actor's state (positions 0..100, library semantics)."""
 
     room_id: int
     channel_id: int
     room_name: str
     channel_name: str
-    position: float  # 0 = open, 100 = closed (library semantics)
+    position: float | None  # None while the box reports "unknown"
     is_moving: bool
     last_updated: datetime | None
+    product_type: int | None = None
+    volant1: float | None = None
+    volant2: float | None = None
 
 
 def shade_key(room_id: int, channel_id: int) -> str:
-    """Stable key identifying a shade within a config entry."""
+    """Stable key identifying a channel within a config entry."""
     return f"{room_id}_{channel_id}"
 
 
@@ -69,7 +92,9 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
 
     config_entry: WmsConfigEntry
 
-    def __init__(self, hass: HomeAssistant, entry: WmsConfigEntry, url: str) -> None:
+    def __init__(
+        self, hass: HomeAssistant, entry: WmsConfigEntry, url: str, client: WmsClient
+    ) -> None:
         """Initialise the coordinator."""
         interval = entry.options.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
         self._base_interval = timedelta(seconds=interval)
@@ -81,49 +106,81 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
             update_interval=self._base_interval,
         )
         self.url = url
-        self.controller: WmsController | None = None
-        self.shades: list[Shade] = []
+        self.client = client
+        self.products: list[ChannelInfo] = []
+        self.scenes: list[ChannelInfo] = []
         self._fast_until: float | None = None
         # Consecutive failed polls, see POLL_FAILURE_TOLERANCE.
         self._poll_failures = 0
         # Last commanded HA target position per shade key, used to derive the
         # movement direction. Shared between the cover and the status sensor.
         self.targets: dict[str, int | None] = {}
-        # Serialises all box I/O: the WebControl server shares a single command
-        # counter and rejects overlapping/too-fast commands, so a poll and a
-        # move must never run concurrently.
-        self._lock = threading.Lock()
+
+    # -- discovery -----------------------------------------------------------
 
     async def async_setup(self) -> None:
-        """Connect to the box and run auto-discovery (blocking I/O)."""
-        await self.hass.async_add_executor_job(self._connect)
-
-    def _connect(self) -> None:
-        """Blocking connect + discovery. Runs in the executor."""
-        self.controller = WmsController(self.url)
-        shades = Shade.get_all_shades(
-            self.controller,
-            time_between_cmds=TIME_BETWEEN_CMDS,
-            num_retries=SHADE_NUM_RETRIES,
-        )
+        """Discover products and scenes on the box."""
+        channels = await self.client.discover()
         excluded = self.config_entry.options.get(CONF_EXCLUDE_CHANNELS, [])
-        self.shades = [
-            shade
-            for shade in shades
-            if not helpers.is_excluded(shade.get_channel_name(), excluded)
-        ]
+        self.products = []
+        self.scenes = []
+        for channel in channels:
+            if channel.is_scene:
+                self.scenes.append(channel)
+            elif not helpers.is_cover_type(channel.product_type):
+                LOGGER.info(
+                    "Skipping %s (product type %s is not a cover yet)",
+                    channel.name,
+                    channel.product_type,
+                )
+            elif helpers.is_excluded(channel.name, excluded):
+                LOGGER.debug("Excluding %s by option", channel.name)
+            else:
+                self.products.append(channel)
         LOGGER.debug(
-            "Discovered %d shade(s) on %s (%d after exclusions)",
-            len(shades),
+            "Discovered %d product(s) and %d scene(s) on %s",
+            len(self.products),
+            len(self.scenes),
             self.url,
-            len(self.shades),
         )
+
+    def product(self, key: str) -> ChannelInfo:
+        """Return the product channel for a key."""
+        for channel in self.products:
+            if channel.key == key:
+                return channel
+        raise KeyError(key)
+
+    # -- polling -------------------------------------------------------------
+
+    async def _read(self, channel: ChannelInfo) -> ShadeInfo:
+        state = await self.client.read_state(channel.room_id, channel.channel_id)
+        return ShadeInfo(
+            room_id=channel.room_id,
+            channel_id=channel.channel_id,
+            room_name=channel.room_name,
+            channel_name=channel.name,
+            position=lib_position(state.position),
+            is_moving=state.moving,
+            last_updated=datetime.now(),
+            product_type=channel.product_type,
+            volant1=lib_position(state.volant1),
+            volant2=lib_position(state.volant2),
+        )
+
+    async def _read_all(
+        self, channels: list[ChannelInfo] | None = None
+    ) -> dict[str, ShadeInfo]:
+        result: dict[str, ShadeInfo] = {}
+        for channel in self.products if channels is None else channels:
+            result[channel.key] = await self._read(channel)
+        return result
 
     async def _async_update_data(self) -> dict[str, ShadeInfo]:
-        """Fetch the latest state of all shades."""
+        """Fetch the latest state of all actors."""
         try:
-            data = await self.hass.async_add_executor_job(self._poll)
-        except COMMAND_ERRORS as err:
+            data = await self._read_all()
+        except WmsError as err:
             self._poll_failures += 1
             if self.data is not None and self._poll_failures <= POLL_FAILURE_TOLERANCE:
                 # Short busy phases (e.g. while a motor runs) must not flap the
@@ -147,39 +204,6 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
         self._adjust_interval(any(info.is_moving for info in data.values()))
         return data
 
-    def _poll(self) -> dict[str, ShadeInfo]:
-        """Blocking poll of every discovered shade. Runs in the executor."""
-        with self._lock:
-            return self._read_all()
-
-    def _read_all(self) -> dict[str, ShadeInfo]:
-        """Read every shade's state. Caller must hold the lock.
-
-        Uses :func:`helpers.read_state`, which waits for the box to be ready and
-        raises instead of silently keeping a stale value when the box answers
-        with an errorcode.
-        """
-        result: dict[str, ShadeInfo] = {}
-        for shade in self.shades:
-            position, is_moving = helpers.read_state(
-                self.controller,
-                shade.room.id,
-                shade.channel.id,
-                tries=NUM_RETRIES,
-                wait=TIME_BETWEEN_CMDS,
-            )
-            key = shade_key(shade.room.id, shade.channel.id)
-            result[key] = ShadeInfo(
-                room_id=shade.room.id,
-                channel_id=shade.channel.id,
-                room_name=shade.get_room_name(),
-                channel_name=shade.get_channel_name(),
-                position=position,
-                is_moving=is_moving,
-                last_updated=datetime.now(),
-            )
-        return result
-
     def _adjust_interval(self, any_moving: bool) -> None:
         """Speed up polling while shades are (or were just) moving."""
         now = self.hass.loop.time()
@@ -196,129 +220,163 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
         self._fast_until = self.hass.loop.time() + FAST_UPDATE_DURATION
         self.update_interval = timedelta(seconds=FAST_UPDATE_INTERVAL)
 
-    def _shade_by_key(self, key: str) -> Shade:
-        """Return the library Shade object for a coordinator key."""
-        for shade in self.shades:
-            if shade_key(shade.room.id, shade.channel.id) == key:
-                return shade
-        raise KeyError(key)
-
     def set_target(self, key: str, ha_position: int | None) -> None:
         """Record the last commanded HA target position for a shade."""
         self.targets[key] = ha_position
 
-    async def async_set_position(self, key: str, lib_position: int) -> None:
-        """Move a shade to a library position (0 = open, 100 = closed)."""
-        shade = self._shade_by_key(key)
-        await self.hass.async_add_executor_job(self._move, shade, lib_position)
+    # -- cover operations ----------------------------------------------------
+
+    async def async_move(
+        self,
+        key: str,
+        position: float | None = None,
+        *,
+        volant1: float | None = None,
+        volant2: float | None = None,
+    ) -> None:
+        """Move an actor (positions 0..100, library semantics).
+
+        Failures are logged, not raised: callers such as the wind/rain safety
+        script check the final state themselves and must not abort on a single
+        unconfirmed attempt.
+        """
+        channel = self.product(key)
+
+        def raw(value: float | None) -> int | None:
+            return None if value is None else int(round(value * 2))
+
+        for attempt in range(1, MOVE_ATTEMPTS + 1):
+            try:
+                result = await self.client.move(
+                    channel.room_id,
+                    channel.channel_id,
+                    raw(position),
+                    volant1=raw(volant1),
+                    volant2=raw(volant2),
+                )
+            except WmsError as err:
+                LOGGER.warning(
+                    "Move of %s failed (attempt %d): %s", channel.name, attempt, err
+                )
+                continue
+            if result.confirmed is not False:
+                break
+            LOGGER.debug("Move of %s not confirmed (attempt %d)", channel.name, attempt)
+        else:
+            LOGGER.warning(
+                "Move of %s not confirmed by the box after %d attempt(s)",
+                channel.name,
+                MOVE_ATTEMPTS,
+            )
         self.trigger_fast_poll()
         await self.async_request_refresh()
 
-    def _move(self, shade: Shade, lib_position: int) -> None:
-        """Move a shade via the library. Runs in the executor.
-
-        Uses the library's ``set_shade_position`` (which gates on the box's
-        "check ready" response and resends if its own state check fails). The
-        result is logged but not raised: callers such as the wind/rain safety
-        script verify the final state themselves and must not abort on a single
-        unconfirmed attempt.
-        """
-        with self._lock:
-            if not shade.set_shade_position(lib_position):
-                LOGGER.warning(
-                    "Move of %s to %s not confirmed by the box",
-                    shade.get_channel_name(),
-                    lib_position,
-                )
-
-    async def async_send_raw(self, payload_hex: str) -> None:
-        """Replay a raw preset payload and verify that a shade reacted.
-
-        Raises :class:`HomeAssistantError` if the box is unreachable or does not
-        accept the command, so a failed press is visible in the UI instead of
-        being swallowed.
-        """
-        if self.controller is None:
-            raise HomeAssistantError("WebControl not connected")
+    async def async_stop(self, key: str) -> None:
+        """Stop an actor."""
+        channel = self.product(key)
         try:
-            await self.hass.async_add_executor_job(self._send_raw_verified, payload_hex)
-        except COMMAND_ERRORS as err:
-            raise HomeAssistantError(
-                f"WebControl did not accept preset {payload_hex}: {err}"
-            ) from err
+            result = await self.client.stop(channel.room_id, channel.channel_id)
+            if result.confirmed is False:
+                await self.client.stop(channel.room_id, channel.channel_id)
+        except WmsError as err:
+            raise HomeAssistantError(f"Stop of {channel.name} failed: {err}") from err
+        finally:
+            self.targets.pop(key, None)
+            self.trigger_fast_poll()
+            await self.async_request_refresh()
+
+    async def async_wink(self, key: str) -> None:
+        """Let an actor move briefly to identify it."""
+        channel = self.product(key)
+        try:
+            await self.client.wink(channel.room_id, channel.channel_id)
+        except WmsError as err:
+            raise HomeAssistantError(f"Wink of {channel.name} failed: {err}") from err
+
+    # -- scenes --------------------------------------------------------------
+
+    async def _snapshot(self, room_id: int) -> dict[str, tuple[float | None, bool]]:
+        """Best-effort state of the actors in a room, for movement checks."""
+        channels = [c for c in self.products if c.room_id == room_id]
+        try:
+            data = await self._read_all(channels)
+        except WmsError as err:
+            LOGGER.debug("State snapshot failed: %s", err)
+            return {}
+        return {key: (info.position, info.is_moving) for key, info in data.items()}
+
+    async def _moved_since(self, room_id: int, before: dict) -> bool | None:
+        """Return True if an actor moved, False if not, None if unknown."""
+        after: dict = {}
+        for _ in range(VERIFY_READS):
+            await asyncio.sleep(POST_COMMAND_SETTLE)
+            after = await self._snapshot(room_id)
+            if any(
+                state[0] is not None
+                and helpers.movement_detected(before.get(key), state)
+                for key, state in after.items()
+            ):
+                return True
+        if not before or not after:
+            return None
+        return False
+
+    async def async_run_scene(self, room_id: int, channel_id: int, label: str) -> None:
+        """Recall a scene and make sure the box executed it.
+
+        Primary check: the box's own confirmation (poll of the channel
+        operation). If the box gives none, fall back to checking whether an
+        actor in the room moved. Resends only when nothing happened, so a
+        running motor is never interrupted.
+
+        Raises HomeAssistantError if the box rejects the scene on every attempt
+        or is unreachable, so a failed press is visible in the UI.
+        """
+        attempts = 1 + PRESET_RESENDS
+        before = await self._snapshot(room_id)
+        try:
+            for attempt in range(1, attempts + 1):
+                result = await self.client.run_scene(room_id, channel_id)
+                if result.confirmed:
+                    LOGGER.debug("Scene %s confirmed by box (attempt %d)", label, attempt)
+                    return
+                if result.confirmed is None:
+                    moved = await self._moved_since(room_id, before)
+                    if moved is not False:
+                        return
+                LOGGER.debug("Scene %s not executed (attempt %d)", label, attempt)
+            if result.confirmed is False:
+                raise HomeAssistantError(
+                    f"WebControl did not execute scene {label} after {attempts} attempt(s)"
+                )
+            LOGGER.warning(
+                "Scene %s sent, but no movement detected (actor may already be "
+                "in position)",
+                label,
+            )
+        except WmsError as err:
+            raise HomeAssistantError(f"Scene {label} failed: {err}") from err
         finally:
             self.trigger_fast_poll()
             await self.async_request_refresh()
 
-    def _snapshot(self) -> dict[str, tuple[float, bool]]:
-        """Best-effort state snapshot for movement verification. Holds no lock."""
+    async def async_send_payload(self, payload_hex: str, label: str) -> None:
+        """Send a manually configured (0.3.x style) preset payload."""
         try:
-            return {
-                key: (info.position, info.is_moving)
-                for key, info in self._read_all().items()
-            }
-        except COMMAND_ERRORS as err:
-            LOGGER.debug("State snapshot failed: %s", err)
-            return {}
-
-    def _send_raw_verified(self, payload_hex: str) -> bool:
-        """Blocking raw send with movement check. Runs in the executor.
-
-        1. Snapshot all shades.
-        2. Send the payload; :func:`helpers.send_raw` only returns once the box
-           acknowledged it (``feedback=1``), otherwise it raises.
-        3. Wait for the box to settle, then check up to ``VERIFY_READS`` times
-           whether any shade moves or changed position.
-        4. If nothing reacted, resend (``PRESET_RESENDS`` times). Nothing moved,
-           so a resend cannot interrupt a running motor.
-
-        Returns whether movement was detected. No movement after all resends is
-        logged as a warning but not raised: the shade may already sit at the
-        preset's target (e.g. "retract" on a retracted awning).
-        """
-        with self._lock:
-            before = self._snapshot()
-            attempts = 1 + PRESET_RESENDS
-            for attempt in range(1, attempts + 1):
-                helpers.send_raw(
-                    self.controller,
-                    payload_hex,
-                    retries=PRESET_SEND_ATTEMPTS,
-                    wait=TIME_BETWEEN_CMDS,
-                    retry_wait=PRESET_RETRY_WAIT,
-                    exceptions=TRANSPORT_ERRORS,
-                )
-                LOGGER.debug("Preset %s accepted by box (attempt %d)", payload_hex, attempt)
-                for _ in range(VERIFY_READS):
-                    time.sleep(POST_COMMAND_SETTLE)
-                    after = self._snapshot()
-                    if any(
-                        helpers.movement_detected(before.get(key), state)
-                        for key, state in after.items()
-                    ):
-                        LOGGER.debug("Preset %s: movement detected", payload_hex)
-                        return True
-                LOGGER.debug(
-                    "Preset %s: no movement after attempt %d (before=%s, after=%s)",
-                    payload_hex,
-                    attempt,
-                    before,
-                    after,
-                )
-                if not before or not after:
-                    # Without both snapshots we cannot tell "not moving" from
-                    # "could not read" - do not risk resending into a moving motor.
-                    LOGGER.warning(
-                        "Preset %s accepted by the box, movement could not be "
-                        "verified (state read failed); not resending",
-                        payload_hex,
-                    )
-                    return False
-            LOGGER.warning(
-                "Preset %s was accepted by the box but no shade moved after %d "
-                "attempt(s). Either it is already at the preset position or the "
-                "radio command did not reach the motor",
-                payload_hex,
-                attempts,
-            )
-            return False
+            payload = parse_legacy_payload(payload_hex)
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        if (
+            len(payload) >= 4
+            and payload[0] == TEL_KANALBEDIENUNG
+            and payload[3] == FC_SZENE_AUSFUEHREN
+        ):
+            await self.async_run_scene(payload[1], payload[2], label)
+            return
+        try:
+            await self.client.send_payload(payload)
+        except WmsError as err:
+            raise HomeAssistantError(f"Preset {label} failed: {err}") from err
+        finally:
+            self.trigger_fast_poll()
+            await self.async_request_refresh()

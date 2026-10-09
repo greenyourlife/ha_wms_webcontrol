@@ -2,38 +2,26 @@
 
 from __future__ import annotations
 
-import xml.etree.ElementTree as ElemTree
-
-import requests
-
 from homeassistant.const import CONF_URL, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .coordinator import WmsConfigEntry, WmsWebControlCoordinator
+from .client import WmsClient, WmsError
+from .coordinator import WmsConfigEntry, WmsWebControlCoordinator, make_fetch
 
 PLATFORMS: list[Platform] = [Platform.COVER, Platform.BUTTON, Platform.SENSOR]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: WmsConfigEntry) -> bool:
     """Set up WAREMA WMS WebControl from a config entry."""
-    coordinator = WmsWebControlCoordinator(hass, entry, entry.data[CONF_URL])
+    url = entry.data[CONF_URL]
+    client = WmsClient(make_fetch(hass, url))
+    coordinator = WmsWebControlCoordinator(hass, entry, url, client)
 
     try:
         await coordinator.async_setup()
-    except (
-        requests.RequestException,
-        OSError,
-        ValueError,
-        ElemTree.ParseError,
-        # The library dereferences ``find(...).text`` during discovery; a busy /
-        # errorcode answer therefore surfaces as AttributeError. Retry instead of
-        # failing the entry permanently.
-        AttributeError,
-    ) as err:
-        raise ConfigEntryNotReady(
-            f"Could not connect to WebControl at {entry.data[CONF_URL]}: {err}"
-        ) from err
+    except WmsError as err:
+        raise ConfigEntryNotReady(f"Could not connect to WebControl at {url}: {err}") from err
 
     await coordinator.async_config_entry_first_refresh()
 

@@ -5,13 +5,14 @@ from __future__ import annotations
 from homeassistant.components.cover import CoverDeviceClass
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import helpers
-from .const import AWNING_STATES, CONF_DEVICE_CLASSES, CONF_INVERT, DOMAIN
+from .client import ChannelInfo
+from .const import AWNING_STATES, CONF_DEVICE_CLASSES, CONF_INVERT
 from .coordinator import ShadeInfo, WmsConfigEntry, WmsWebControlCoordinator
+from .entity import hub_device_info
 
 _VALID_DEVICE_CLASSES = {cls.value for cls in CoverDeviceClass}
 
@@ -27,14 +28,14 @@ async def async_setup_entry(
     invert_overrides: dict[str, bool] = entry.options.get(CONF_INVERT, {})
 
     entities = []
-    for key, info in (coordinator.data or {}).items():
-        device_class = helpers.resolved_device_class(
-            info.channel_name, dc_overrides, _VALID_DEVICE_CLASSES
+    for channel in coordinator.products:
+        device_class = helpers.device_class_for(
+            channel.name, channel.product_type, dc_overrides, _VALID_DEVICE_CLASSES
         )
         if device_class != CoverDeviceClass.AWNING.value:
             continue
-        invert = helpers.resolve_invert(info.channel_name, device_class, invert_overrides)
-        entities.append(WmsAwningStatus(coordinator, entry, key, info, invert))
+        invert = helpers.resolve_invert(channel.name, device_class, invert_overrides)
+        entities.append(WmsAwningStatus(coordinator, entry, channel, invert))
     async_add_entities(entities)
 
 
@@ -50,22 +51,15 @@ class WmsAwningStatus(CoordinatorEntity[WmsWebControlCoordinator], SensorEntity)
         self,
         coordinator: WmsWebControlCoordinator,
         entry: WmsConfigEntry,
-        key: str,
-        info: ShadeInfo,
+        channel: ChannelInfo,
         invert: bool,
     ) -> None:
         """Initialise the status sensor."""
         super().__init__(coordinator)
-        self._key = key
+        self._key = channel.key
         self._invert = invert
-        self._attr_unique_id = f"{entry.entry_id}_{key}_status"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name="WAREMA WMS WebControl",
-            manufacturer="WAREMA",
-            model="WMS WebControl",
-            configuration_url=coordinator.url,
-        )
+        self._attr_unique_id = f"{entry.entry_id}_{channel.key}_status"
+        self._attr_device_info = hub_device_info(entry, coordinator.url)
 
     @property
     def _info(self) -> ShadeInfo | None:
@@ -83,7 +77,7 @@ class WmsAwningStatus(CoordinatorEntity[WmsWebControlCoordinator], SensorEntity)
     def native_value(self) -> str | None:
         """Return the current status option key."""
         info = self._info
-        if info is None:
+        if info is None or info.position is None:
             return None
         ha_position = helpers.ha_from_lib(info.position, self._invert)
         return helpers.awning_state(

@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.4.0 – 2026-10-09
+
+- **Eigene Protokoll-Implementierung statt `warema-wms-controller`.** Grundlage
+  ist das JavaScript der Weboberfläche der Box (`docs/PROTOCOL.md`). Keine
+  externe Abhängigkeit mehr, vollständig async über die HA-HTTP-Session.
+- **Befehlszähler wie die offizielle Oberfläche** (0–254, nie 255). Die alte
+  Library sendete auch 255.
+- **Quittung und Ausführung über die Box selbst:** Nach einem Befehl wird das
+  Ergebnis wie in der offiziellen Oberfläche abgefragt (Polling auf die
+  Kanalbedienung). „Busy“ → erneut senden. Fallback auf die Bewegungsprüfung,
+  wenn die Box keine Bestätigung liefert.
+- **Szenen werden automatisch erkannt** und als Buttons angelegt. Bestehende
+  Preset-Buttons mit passendem Payload behalten Entity-ID und Namen.
+- **Typ-Erkennung** aus dem Produkttyp der Box (Markise, Rollladen, Raffstore,
+  Rollo …) statt Namens-Heuristik; Volant-Covers für Markisen mit Volant.
+- **Neu:** `STOP` am Cover, Winken-Button je Behang.
+- **Sicherheits-Allowlist:** Nur Abfragen, Fahren, Stopp, Szene ausführen und
+  Winken werden gesendet. Löschen/Umbenennen/Projekt laden/Szene lernen sind im
+  Client gesperrt, auch für manuelle Presets.
+- Tests: Protokoll-Client gegen simulierte Box, Integrationstests in einer
+  HA-Testinstanz (`tests/ha`).
+- An der Box getestet (2026-10-09, Markise): Szenen, Fahren auf Position,
+  Stopp während der Fahrt, Gegenbefehl, Doppelklick und Schnellfolge. Alle
+  Szenen wurden von der Box beim ersten Versuch quittiert.
+
 ## 0.3.2 – 2026-10-09
 
 - **Preset-Buttons prüfen jetzt, ob der Befehl ankommt.** Die Quittung der Box

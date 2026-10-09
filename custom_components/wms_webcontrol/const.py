@@ -39,27 +39,16 @@ DEFAULT_URL: Final = "http://webcontrol.local"
 DEFAULT_UPDATE_INTERVAL: Final = 600  # seconds
 MIN_UPDATE_INTERVAL: Final = 30  # seconds
 
-# The WebControl server rejects commands that arrive too quickly after each
-# other, so the library needs a wait time between the "check ready" request and
-# the actual command. 0.5s has proven reliable over the local network.
-TIME_BETWEEN_CMDS: Final = 0.5
-NUM_RETRIES: Final = 3
-# Retries the library uses per shade for moves and state reads. Kept low so a
-# move doesn't churn through the slow verify loop, but >1 so the box's
-# "check ready" gate still gets a second chance. The coordinator lock already
-# prevents a concurrent poll from making the box busy.
-SHADE_NUM_RETRIES: Final = 2
+# How often a cover move is re-sent when the box does not confirm it.
+MOVE_ATTEMPTS: Final = 2
+# HTTP timeout per request to the box.
+REQUEST_TIMEOUT: Final = 10  # seconds
 
 # After a preset (scene) command, how long to wait before checking whether a
 # shade reacted, how many checks to make, and how often to resend the scene if
 # nothing moved. A resend only happens when the shade neither reports movement
 # nor changed position, so a running motor is never interrupted.
 POST_COMMAND_SETTLE: Final = 1.5  # seconds
-# Attempts / pause for getting a preset acknowledged (feedback=1). The box can
-# reject a command although check-ready said "ready" and then stays busy for
-# 1.5 s or more, so attempts are spaced generously (~8 s budget in total).
-PRESET_SEND_ATTEMPTS: Final = 5
-PRESET_RETRY_WAIT: Final = 1.0  # seconds
 VERIFY_READS: Final = 2
 PRESET_RESENDS: Final = 1
 
@@ -74,11 +63,6 @@ POLL_FAILURE_TOLERANCE: Final = 2
 FAST_UPDATE_INTERVAL: Final = 5  # seconds
 FAST_UPDATE_DURATION: Final = 15  # seconds
 
-# Prefilled scene recalls captured by the user. These are verbatim protocol
-# payloads (format ``0821 + 00 + <idx> + 08ffffffff``) WITHOUT the variable
-# ``90<counter>`` prefix, which the library prepends automatically.
-DEFAULT_PRESETS: Final[list[dict[str, str]]] = [
-    {PRESET_NAME: "Markise einfahren", PRESET_PAYLOAD: "0821000308ffffffff"},
-    {PRESET_NAME: "Markise 60 %", PRESET_PAYLOAD: "0821000108ffffffff"},
-    {PRESET_NAME: "Markise 100 %", PRESET_PAYLOAD: "0821000208ffffffff"},
-]
+# 0.3.x shipped the author's scene payloads as defaults. Since 0.4 scenes are
+# discovered from the box; manual presets are only an optional extra.
+DEFAULT_PRESETS: Final[list[dict[str, str]]] = []
