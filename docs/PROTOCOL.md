@@ -43,7 +43,7 @@ Payload angehängt, max. 20 Zeichen.
 | 0x23 | POS_RUECKMELDUNG (Motor aufwecken / Position anfordern) | raum, kanal | nein |
 | 0x25 | WINKEN | raum, kanal | Bedienung |
 | 0x27 / 0x29 | PASSWORT_ABFRAGE / _AENDERN | … | ja |
-| 0x2B | AUTOMATIK | on_off (global) | Einstellung |
+| 0x2B | AUTOMATIK | on_off (global, **setzt** – es gibt kein reines Lesen) | Einstellung |
 | 0x2D | GRENZWERTE lesen | raum, kanal | nein |
 | 0x2F | RTC | read_write, senden, tag, monat, jahr%100, h, m, s | Uhrzeit |
 | 0x31 | POLLING | raum, kanal, befehl (s. u.) | nein |
@@ -154,3 +154,29 @@ Platz. Position in Library-Semantik (Markise: 0 = eingefahren).
 
 Zeitschaltuhr ein; Mo–So jeweils 18:30 → Position 0 (einfahren); übrige
 Schaltzeiten leer.
+
+## Box-Uhr (RTC, 0x2F → 48)
+
+- Lesen wie die offizielle UI: `2F 00 00 03 03 0C 03 03 03` (Dummy-Datum).
+  Antwort direkt `48` mit `senden`, `tag`, `monat`, `jahr` (2-stellig),
+  `stunden`, `minuten`, `sekunden`. Ortszeit, keine Sommerzeit-Automatik.
+- Schreiben: `2F 01 <senden> tag monat jahr%100 h m s`.
+- `senden` = „Systemzeit senden“: die Box verteilt ihre Uhrzeit im WMS-Netz
+  (Hinweis der UI: es darf nur einen Systemzeitgeber geben). Beim Stellen wird
+  der gelesene Wert unverändert zurückgeschrieben.
+- Beobachtet 2026-10-09: `senden = 1`, Abweichung < 1 min.
+
+## Grenzwerte (0x2D → 51, Poll 2 → 46)
+
+Antwortfelder: `windverf`, `windgw`, `regenverf`, `regengw`, `sonneverf`,
+`sonnegw`, `daemmerungverf`, `daemmerunggw` (0–9, 0 = aus), `komfort`.
+Beobachtet 2026-10-09 (Balkon/Markise): alle `…verf = 1`, alle Grenzwerte 0
+→ keine Automatik aktiv.
+
+## Zeitschaltuhr – Ergänzungen (aus `WebControlEinstellen.js`)
+
+- Position im Block = Protokollwert **0–200** (UI-Wert × 2), 255 = Position
+  unverändert. 200/0 werden auch für „Ein/Aus“ bei Schaltaktoren genutzt.
+- Feld 6 je Schaltzeit ist die **Automatik-Freigabe** (Komfort):
+  0 = sperren, 1 = freigeben, 2 = unverändert. Eine Schaltzeit ist belegt,
+  wenn Stunde/Minute gültig sind (≠ 255).

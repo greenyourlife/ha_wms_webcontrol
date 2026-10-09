@@ -26,6 +26,16 @@ gelesen und als Buttons angelegt.
 - **Szenen-Buttons** für jede in der Box gespeicherte Szene.
 - **Winken-Button** je Behang (Motor bewegt sich kurz zur Identifikation).
 - **Status-Sensor je Markise** („Eingefahren / Ausgefahren / Fährt ein / …“).
+- **Zeitschaltuhr (lesen):** Sensor „Nächste Schaltzeit“ je Behang mit
+  Zielposition und Wochenplan. Die Schaltzeiten liegen im Motor und laufen
+  auch ohne HA und Box. Gelesen wird beim Start und per Button
+  „Zeitschaltuhr lesen“ (Funkabfrage, einige Sekunden; währenddessen warten
+  andere Befehle kurz).
+- **Box-Uhr:** Sensor „Box-Uhr Abweichung“, automatischer Abgleich (Option,
+  Standard an: beim Start und täglich 03:30 ab 60 s Abweichung), Button
+  „Box-Uhr stellen“.
+- **Reparaturhinweis** nach 15 Minuten ohne Verbindung zur Box,
+  **Diagnose-Download**.
 - **Zuverlässigkeit:**
   - Jeder Befehl wird von der Box quittiert. „Busy“ → automatisch erneut senden
     (wie die offizielle Oberfläche). Szenen werden zusätzlich auf Ausführung
@@ -39,8 +49,10 @@ gelesen und als Buttons angelegt.
 
 Die Integration sendet nur eine fest definierte Liste von Telegrammen
 (`ALLOWED_TELEGRAMS` in `client.py`): Abfragen, Fahren, Stopp, Szene ausführen,
-Winken. **Löschen, Umbenennen, Projekt laden und „Szene lernen“ sind gesperrt**
-und verlassen HA nie, auch nicht über manuell eingetragene Presets.
+Winken, Zeitschaltuhr lesen, Uhr lesen/stellen (nur plausible Werte).
+**Löschen, Umbenennen, Projekt laden, „Szene lernen“, Timer schreiben und
+Automatik/Grenzwerte setzen sind gesperrt** und verlassen HA nie, auch nicht
+über manuell eingetragene Presets.
 
 ## Installation
 
@@ -78,6 +90,7 @@ Ordner `custom_components/wms_webcontrol/` nach
 - **Position invertieren** (optional) – `Kanalname = true/false` je Zeile.
 - **Kanäle ausschließen** (optional) – ein Behang-Name je Zeile. Gilt nur für
   Behänge; Szenen werden immer als Buttons angelegt.
+- **Box-Uhr automatisch stellen** (Standard an).
 
 ## Upgrade von 0.3.x
 

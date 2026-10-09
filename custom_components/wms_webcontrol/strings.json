@@ -28,7 +28,8 @@
           "presets": "Additional presets (Name | payload_hex)",
           "device_classes": "Device class overrides (channel = class)",
           "invert": "Invert position (channel = true/false)",
-          "exclude_channels": "Exclude channels (one channel name per line)"
+          "exclude_channels": "Exclude channels (one channel name per line)",
+          "clock_sync": "Set the box clock automatically (at startup and daily, if off by more than 60 s)"
         }
       }
     },
@@ -47,7 +48,27 @@
           "extending": "Extending",
           "partial": "Partially extended"
         }
+      },
+      "next_switch": {
+        "name": "Next switching time"
+      },
+      "clock_offset": {
+        "name": "Box clock offset"
       }
+    },
+    "button": {
+      "read_timers": {
+        "name": "Read timers"
+      },
+      "set_clock": {
+        "name": "Set box clock"
+      }
+    }
+  },
+  "issues": {
+    "box_unreachable": {
+      "title": "WebControl box unreachable",
+      "description": "The WebControl box at {url} has not answered since {since} ({error}). Shades cannot be controlled from Home Assistant and wind/rain automations will not work. Check the box and its power supply, restart it if needed. This notice disappears once the box answers again."
     }
   }
 }
