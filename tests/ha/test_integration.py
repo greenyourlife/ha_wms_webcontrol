@@ -77,6 +77,9 @@ async def test_setup_keeps_03x_unique_ids(hass: HomeAssistant, no_sleep) -> None
     # Scenes are not created as covers (the old exclusion list is not needed).
     assert not any(uid.startswith("01TESTENTRY_0_1") for uid in unique_ids)
 
+    wink = hass.states.get(unique_ids["01TESTENTRY_0_0_wink"])
+    assert wink.attributes["friendly_name"] == "WAREMA WMS WebControl Winken"
+
     cover = hass.states.get(unique_ids["01TESTENTRY_0_0"])
     assert cover.state == "closed"
     assert cover.attributes["device_class"] == "awning"
