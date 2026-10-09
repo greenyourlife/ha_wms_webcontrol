@@ -7,8 +7,7 @@ unit-tested on a plain Python interpreter with a mocked controller.
 
 from __future__ import annotations
 
-import time
-from typing import Callable, Optional
+from typing import Optional
 
 
 def invert_position(lib_position: float) -> int:
@@ -240,166 +239,64 @@ def format_device_classes_text(mapping: dict[str, str]) -> str:
     return "\n".join(f"{key} = {value}" for key, value in mapping.items())
 
 
-# --- Box protocol helpers -----------------------------------------------------
-#
-# Every request returns a small XML document. Observed shapes (WebControl
-# firmware as of 2026-10):
-#
-#   check ready / command ack:  <feedback>1</feedback>  (0 = busy / not accepted)
-#   shade state:                <fahrt>0</fahrt><position>0</position>
-#   rejected (box busy):        <errorcode>32</errorcode>
-#
-# The box goes busy for roughly 0.5-1 s after every command. Anything sent in
-# that window is answered with feedback=0 or an errorcode and silently dropped.
+# --- Product types (``produkttyp`` reported by the box) ---------------------
+
+# Mapping from the box's product type to a Home Assistant cover device class
+# string. Taken from the box's web interface (TYPE_* constants).
+PRODUCT_DEVICE_CLASS: dict[int, str] = {
+    0: "blind",  # Raffstore
+    1: "blind",  # Jalousie innen
+    2: "shutter",  # Rollladen
+    3: "awning",  # Markise
+    4: "awning",  # Markise 1 Volant
+    5: "awning",  # Markise int. Wind
+    6: "awning",  # Markise 1 Volant int. Wind
+    7: "awning",  # Wintergarten-Markise
+    8: "awning",  # Fassadenmarkise
+    9: "awning",  # Fallarmmarkise
+    10: "awning",  # Senkrechtmarkise
+    11: "awning",  # Markisolette
+    12: "shade",  # Faltstore innen
+    13: "shade",  # Rollo innen
+    14: "blind",  # Vertikal-Jalousie innen
+    15: "window",  # Fenster
+    21: "shade",  # Volant
+    22: "awning",  # Markise 2 Volant
+    23: "awning",  # Markise 2 Volant int. Wind
+    24: "shade",  # Sonnensegel
+    25: "awning",  # Pergolamarkise
+}
+
+# Product types with one or two separately movable valances (Volant).
+VOLANT_PARTS: dict[int, tuple[str, ...]] = {
+    4: ("volant1",),
+    6: ("volant1",),
+    22: ("volant1", "volant2"),
+    23: ("volant1", "volant2"),
+}
+
+# Product types with tiltable slats.
+TILT_TYPES = frozenset({0, 1, 14})
 
 
-class WmsCommandError(Exception):
-    """The box did not accept a command or returned no usable answer."""
+def is_cover_type(product_type: int | None) -> bool:
+    """Return whether a product type is a cover (lights/loads are not, yet)."""
+    return product_type is None or product_type in PRODUCT_DEVICE_CLASS
 
 
-def describe_response(resp) -> str:
-    """Short human-readable summary of a box response for logs/errors."""
-    if resp is None:
-        return "no response"
-    error = resp.find("errorcode")
-    if error is not None:
-        return f"errorcode {error.text}"
-    feedback = resp.find("feedback")
-    if feedback is not None:
-        return f"feedback {feedback.text}"
-    return "unexpected response"
-
-
-def response_ok(resp) -> bool:
-    """Return whether a check-ready / command response signals success.
-
-    ``feedback=1`` means ready/accepted. A response without a feedback element
-    (e.g. a state answer) counts as OK unless it carries an ``errorcode``.
-    """
-    if resp is None:
-        return False
-    if resp.find("errorcode") is not None:
-        return False
-    feedback = resp.find("feedback")
-    return feedback is None or feedback.text == "1"
-
-
-def wait_ready(
-    controller,
-    tries: int,
-    wait: float,
-    sleep: Callable[[float], None],
-    room_id: int = 0,
-    channel_id: int = 0,
-) -> bool:
-    """Poll check-ready until the box reports ready. Returns False if it never does."""
-    tries = max(1, tries)
-    for attempt in range(tries):
-        resp = controller.send_rx_check_ready(room_id, channel_id)
-        if response_ok(resp):
-            return True
-        if attempt < tries - 1:
-            sleep(wait)
-    return False
-
-
-def send_raw(
-    controller,
-    payload_hex: str,
-    *,
-    retries: int = 3,
-    wait: float = 0.5,
-    retry_wait: Optional[float] = None,
-    sleep: Callable[[float], None] = time.sleep,
-    exceptions: tuple[type[BaseException], ...] = (Exception,),
-) -> None:
-    """Replay a raw protocol payload and make sure the box accepted it.
-
-    Sequence per attempt: wait until the box reports ready (the command is NOT
-    sent while it stays busy), a short pause, the command, then the box's
-    acknowledgement is checked (``feedback=1``). ``controller._send_command``
-    prepends the ``90<counter>`` prefix and the ``_`` timestamp automatically,
-    so the payload is sent verbatim otherwise.
-
-    Note: a check-ready ``feedback=1`` does NOT guarantee acceptance. Observed
-    2026-10-09: ready at 07:31:38.877, command answered ``feedback=0`` at
-    07:31:39.403 and dropped. Only the command's own acknowledgement counts.
-
-    ``retry_wait`` (default: ``wait``) is the pause between attempts; it should
-    be long enough to outlast the box's busy phase (observed > 1.5 s).
-
-    Raises :class:`WmsCommandError` if the box stays busy or rejects the command
-    on every attempt, or re-raises the last transport error.
-    """
-    pause = wait if retry_wait is None else retry_wait
-    last_exc: Optional[BaseException] = None
-    for _ in range(max(1, retries)):
-        try:
-            if not wait_ready(controller, retries, wait, sleep):
-                last_exc = WmsCommandError("box stayed busy, command not sent")
-            else:
-                sleep(wait)
-                resp = controller._send_command(payload_hex)  # noqa: SLF001 - intended raw path
-                if response_ok(resp):
-                    return
-                last_exc = WmsCommandError(
-                    f"box rejected command ({describe_response(resp)})"
-                )
-        except exceptions as exc:  # noqa: BLE001 - re-raised after retries
-            last_exc = exc
-        sleep(pause)
-    assert last_exc is not None
-    raise last_exc
-
-
-def parse_shade_state(resp) -> Optional[tuple[float, bool]]:
-    """Parse a shade-state answer into ``(position, is_moving)``.
-
-    Position is returned in library semantics (raw value / 2, 0..100). Returns
-    ``None`` for an errorcode answer or a malformed response.
-    """
-    if resp is None or resp.find("errorcode") is not None:
-        return None
-    fahrt = resp.find("fahrt")
-    position = resp.find("position")
-    if fahrt is None or position is None or fahrt.text is None or position.text is None:
-        return None
-    try:
-        return int(position.text) / 2, fahrt.text != "0"
-    except ValueError:
-        return None
-
-
-def read_state(
-    controller,
-    room_id: int,
-    channel_id: int,
-    *,
-    tries: int = 3,
-    wait: float = 0.5,
-    sleep: Callable[[float], None] = time.sleep,
-) -> tuple[float, bool]:
-    """Read one shade's state, waiting for the box to be ready first.
-
-    Unlike the library's ``update_shade_state`` this never silently keeps a
-    stale value: an errorcode answer is retried, and after ``tries`` failed
-    attempts :class:`WmsCommandError` is raised.
-    """
-    last = "no attempt"
-    for _ in range(max(1, tries)):
-        if wait_ready(controller, tries, wait, sleep, room_id, channel_id):
-            sleep(wait)
-            resp = controller.send_rx_shade_state(room_id, channel_id)
-            parsed = parse_shade_state(resp)
-            if parsed is not None:
-                return parsed
-            last = describe_response(resp)
-        else:
-            last = "box stayed busy"
-        sleep(wait)
-    raise WmsCommandError(
-        f"no valid state for room {room_id} channel {channel_id} ({last})"
-    )
+def device_class_for(
+    channel_name: str,
+    product_type: int | None,
+    override: dict[str, str],
+    valid: Optional[set] = None,
+) -> str:
+    """Resolve a cover device class: option override, box type, then name guess."""
+    value = (override or {}).get((channel_name or "").lower())
+    if value and (valid is None or value in valid):
+        return value
+    if product_type in PRODUCT_DEVICE_CLASS:
+        return PRODUCT_DEVICE_CLASS[product_type]
+    return guess_device_class(channel_name)
 
 
 def movement_detected(
