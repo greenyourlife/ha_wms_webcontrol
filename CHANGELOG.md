@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.2 – unreleased
+## 0.3.2 – 2026-10-09
 
 - **Preset-Buttons prüfen jetzt, ob der Befehl ankommt.** Die Quittung der Box
   auf das Szenen-Kommando (`feedback`) wird ausgewertet; bei Ablehnung wird
