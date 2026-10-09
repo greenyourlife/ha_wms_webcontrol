@@ -18,6 +18,7 @@ import time
 import xml.etree.ElementTree as ElemTree
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,17 +41,23 @@ TEL_KANALBEDIENUNG = 0x21
 TEL_POS_RUECKMELDUNG = 0x23
 TEL_WINKEN = 0x25
 TEL_GRENZWERTE = 0x2D
+TEL_RTC = 0x2F
 TEL_POLLING = 0x31
 TEL_KANAL_SZENE_ABFRAGEN = 0x47
+TEL_LESE_WMS_PARAMETER = 0x4D  # actor -> box buffer (read only for the actor)
+TEL_GET_WMS_PARAMETER_ZSP = 0x63  # box buffer -> HA, one area of the timer block
 
 RES_RAUM_ABFRAGEN = 4
 RES_KANALBEDIENUNG = 34
 RES_POS_RUECKMELDUNG = 36
 RES_WINKEN = 38
+RES_RTC = 48
 RES_POLLING = 50
 RES_WMS_STACK_BUSY = 51
 RES_ERROR_MESSAGE = 52
 RES_KANAL_SZENE_ABFRAGEN = 72
+RES_LESE_WMS_PARAMETER = 78
+RES_GET_WMS_PARAMETER_ZSP = 100
 
 # Function codes for TEL_KANALBEDIENUNG.
 FC_STOP = 1
@@ -61,7 +68,9 @@ FC_SZENE_LERNEN = 9  # NOT allowed in 0.4 (would overwrite stored scene position
 # Polling types for TEL_POLLING.
 POLL_KANALBEDIENUNG = 0
 POLL_POSITION = 1
+POLL_GRENZWERTE = 2
 POLL_WINKEN = 5
+POLL_WMS_PARAMETER_LESEN = 9
 
 # Error codes (RES_ERROR_MESSAGE).
 ERROR_POLLING_BEFEHL = 32  # poll without a matching pending request
@@ -74,10 +83,26 @@ ALLOWED_TELEGRAMS = frozenset(
         TEL_POS_RUECKMELDUNG,
         TEL_WINKEN,
         TEL_GRENZWERTE,
+        TEL_RTC,
         TEL_POLLING,
         TEL_KANAL_SZENE_ABFRAGEN,
+        TEL_LESE_WMS_PARAMETER,
+        TEL_GET_WMS_PARAMETER_ZSP,
     }
 )
+# Polling types the client may use (9 = result of reading the timer block).
+ALLOWED_POLLS = frozenset(
+    {POLL_KANALBEDIENUNG, POLL_POSITION, POLL_GRENZWERTE, POLL_WINKEN, POLL_WMS_PARAMETER_LESEN}
+)
+
+# Timer (Schaltzeitpunkte) block: 199 values, transferred in 10 areas of 22.
+TIMER_BLOCK_SIZE = 199
+TIMER_AREAS = 10
+TIMER_AREA_SIZE = 22
+TIMER_DAYS = 7
+TIMER_SLOTS = 4
+TIMER_SLOT_FIELDS = 7
+TIMER_HEADER = 3
 ALLOWED_FUNCTIONS = frozenset({FC_STOP, FC_SOLL_SICHER, FC_SZENE_AUSFUEHREN})
 
 
@@ -172,6 +197,86 @@ class OperationResult:
     feedback: int | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class BoxClock:
+    """Clock of the box (local time, no time zone) and its time-master flag."""
+
+    time: datetime
+    system_time_master: bool  # "Systemzeit senden": box sets the clock of the WMS net
+
+
+@dataclass(frozen=True, slots=True)
+class TimerEntry:
+    """One switching time of an actor's built-in timer."""
+
+    day: int  # 0 = Monday ... 6 = Sunday
+    slot: int  # 0..3
+    hour: int
+    minute: int
+    position: int | None  # raw 0..200 (library semantics), None = unchanged
+    angle: int | None
+    volant1: int | None
+    volant2: int | None
+    comfort: int | None  # automatics at this time: 0 lock, 1 release, 2 unchanged
+
+
+@dataclass(frozen=True, slots=True)
+class TimerPlan:
+    """The weekly timer stored in an actor."""
+
+    enabled: bool
+    entries: tuple[TimerEntry, ...]
+    raw: tuple[int, ...]  # complete 199-value block, kept for diagnostics/writing
+
+    def next_switch(self, now: datetime) -> TimerEntry | None:
+        """Return the next entry after ``now`` (local time), or None."""
+        found = self.next_switch_time(now)
+        return None if found is None else found[1]
+
+    def next_switch_time(self, now: datetime) -> tuple[datetime, TimerEntry] | None:
+        """Return ``(local datetime, entry)`` of the next switching time."""
+        if not self.enabled or not self.entries:
+            return None
+        best: tuple[datetime, TimerEntry] | None = None
+        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        for entry in self.entries:
+            days_ahead = (entry.day - now.weekday()) % 7
+            when = midnight + timedelta(days=days_ahead, hours=entry.hour, minutes=entry.minute)
+            if when <= now:
+                when += timedelta(days=7)
+            if best is None or when < best[0]:
+                best = (when, entry)
+        return best
+
+
+def parse_timer_block(values: list[int]) -> TimerPlan:
+    """Parse the 199-value timer block of an actor (see docs/PROTOCOL.md)."""
+    if len(values) < TIMER_BLOCK_SIZE:
+        raise ValueError(f"timer block has {len(values)} values, expected {TIMER_BLOCK_SIZE}")
+    block = tuple(values[:TIMER_BLOCK_SIZE])
+    entries: list[TimerEntry] = []
+    for day in range(TIMER_DAYS):
+        for slot in range(TIMER_SLOTS):
+            base = TIMER_HEADER + day * TIMER_SLOTS * TIMER_SLOT_FIELDS + slot * TIMER_SLOT_FIELDS
+            hour, minute = block[base], block[base + 1]
+            if hour > 23 or minute > 59:  # 255 = unused slot
+                continue
+            entries.append(
+                TimerEntry(
+                    day=day,
+                    slot=slot,
+                    hour=hour,
+                    minute=minute,
+                    position=raw_or_none(block[base + 2]),
+                    angle=raw_or_none(block[base + 3]),
+                    volant1=raw_or_none(block[base + 4]),
+                    volant2=raw_or_none(block[base + 5]),
+                    comfort=raw_or_none(block[base + 6]),
+                )
+            )
+    return TimerPlan(enabled=block[1] == 1, entries=tuple(entries), raw=block)
+
+
 # --- Helpers -----------------------------------------------------------------
 
 
@@ -200,6 +305,23 @@ def raw_or_none(value: int | None) -> int | None:
     if value is None or value == INVALID:
         return None
     return value
+
+
+def _parse_clock(resp: ElemTree.Element) -> BoxClock:
+    if response_id(resp) != RES_RTC:
+        raise WmsConnectionError("unexpected answer to clock query")
+    try:
+        when = datetime(
+            2000 + (_int(resp, "jahr") or 0),
+            _int(resp, "monat") or 0,
+            _int(resp, "tag") or 0,
+            _int(resp, "stunden") or 0,
+            _int(resp, "minuten") or 0,
+            _int(resp, "sekunden") or 0,
+        )
+    except (TypeError, ValueError) as err:
+        raise WmsConnectionError(f"invalid clock value from box: {err}") from err
+    return BoxClock(time=when, system_time_master=_int(resp, "senden") == 1)
 
 
 def parse_legacy_payload(payload_hex: str) -> bytes:
@@ -277,8 +399,31 @@ class WmsClient:
             if len(payload) < 4 or payload[3] not in ALLOWED_FUNCTIONS:
                 function = payload[3] if len(payload) >= 4 else None
                 raise WmsForbiddenTelegram(f"function code {function} is not allowed")
+        if telegram == TEL_POLLING and (len(payload) < 4 or payload[3] not in ALLOWED_POLLS):
+            raise WmsForbiddenTelegram("polling type is not allowed")
+        if telegram == TEL_RTC:
+            WmsClient._check_rtc(payload)
         if len(payload) > PAYLOAD_MAX:
             raise WmsForbiddenTelegram("payload too long")
+
+    @staticmethod
+    def _check_rtc(payload: bytes) -> None:
+        """Only "read clock" or a plausible "set clock" may be sent."""
+        if len(payload) != 9 or payload[1] not in (0, 1):
+            raise WmsForbiddenTelegram("malformed RTC telegram")
+        if payload[1] == 1:
+            _, _, master, day, month, year, hour, minute, second = payload
+            valid = (
+                master in (0, 1)
+                and 1 <= day <= 31
+                and 1 <= month <= 12
+                and year <= 99
+                and hour <= 23
+                and minute <= 59
+                and second <= 59
+            )
+            if not valid:
+                raise WmsForbiddenTelegram("implausible clock value")
 
     def frame(self, payload: bytes) -> str:
         """Build the hex string for one request (consumes a counter value)."""
@@ -408,6 +553,66 @@ class WmsClient:
             volant1=raw_or_none(_int(resp, "positionvolant1")),
             volant2=raw_or_none(_int(resp, "positionvolant2")),
         )
+
+    async def read_clock(self) -> BoxClock:
+        """Read the box clock (local time as set on the box)."""
+        # The official UI sends dummy date values with read_write = 0.
+        async with self.lock:
+            resp = await self.command(bytes((TEL_RTC, 0, 0, 3, 3, 12, 3, 3, 3)))
+        return _parse_clock(resp)
+
+    async def set_clock(self, when: datetime, *, system_time_master: bool) -> BoxClock:
+        """Set the box clock to ``when`` (local time) and return the new clock.
+
+        ``system_time_master`` must be passed through unchanged from
+        ``read_clock``: it decides whether the box distributes its time in the
+        WMS network, and there must only be one time master.
+        """
+        payload = bytes(
+            (
+                TEL_RTC,
+                1,
+                1 if system_time_master else 0,
+                when.day,
+                when.month,
+                when.year % 100,
+                when.hour,
+                when.minute,
+                when.second,
+            )
+        )
+        async with self.lock:
+            resp = await self.command(payload)
+        if response_id(resp) == RES_RTC:
+            return _parse_clock(resp)
+        return await self.read_clock()
+
+    async def read_timer(self, room_id: int, channel_id: int) -> TimerPlan:
+        """Read the weekly timer stored in an actor (radio round trip)."""
+        async with self.lock:
+            resp = await self.command(bytes((TEL_LESE_WMS_PARAMETER, room_id, channel_id)))
+            if response_id(resp) == RES_WMS_STACK_BUSY and _int(resp, "feedback") != 1:
+                raise WmsBusyError("box did not accept the timer read")
+            await self.poll(
+                room_id, channel_id, POLL_WMS_PARAMETER_LESEN, RES_LESE_WMS_PARAMETER
+            )
+            values: list[int] = []
+            for area in range(TIMER_AREAS):
+                answer = await self.command(
+                    bytes((TEL_GET_WMS_PARAMETER_ZSP, room_id, channel_id, area))
+                )
+                if response_id(answer) != RES_GET_WMS_PARAMETER_ZSP:
+                    raise WmsConnectionError(f"unexpected answer for timer area {area}")
+                text = _text(answer, "parameter") or ""
+                try:
+                    area_values = [int(v) for v in text.split(",") if v.strip()]
+                except ValueError as err:
+                    raise WmsConnectionError(f"invalid timer area {area}: {text!r}") from err
+                values.extend(area_values[:TIMER_AREA_SIZE])
+        try:
+            return parse_timer_block(values)
+        except ValueError as err:
+            raise WmsConnectionError(str(err)) from err
 
     # -- operations -----------------------------------------------------------
 
