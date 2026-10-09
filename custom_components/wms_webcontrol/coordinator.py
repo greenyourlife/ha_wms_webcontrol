@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import threading
+import time
+import xml.etree.ElementTree as ElemTree
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -11,6 +13,7 @@ from warema_wms import Shade, WmsController
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from . import helpers
@@ -23,13 +26,22 @@ from .const import (
     FAST_UPDATE_INTERVAL,
     LOGGER,
     NUM_RETRIES,
+    POLL_FAILURE_TOLERANCE,
+    POST_COMMAND_SETTLE,
+    PRESET_RESENDS,
+    PRESET_RETRY_WAIT,
+    PRESET_SEND_ATTEMPTS,
     SHADE_NUM_RETRIES,
     TIME_BETWEEN_CMDS,
+    VERIFY_READS,
 )
 
 # Transport-level errors that should mark the box as (temporarily) unavailable
-# instead of crashing the integration.
-TRANSPORT_ERRORS = (requests.RequestException, OSError, ValueError)
+# instead of crashing the integration. ParseError (malformed XML) derives from
+# SyntaxError, not ValueError, so it is listed explicitly.
+TRANSPORT_ERRORS = (requests.RequestException, OSError, ValueError, ElemTree.ParseError)
+# Everything that means "the box did not do what we asked".
+COMMAND_ERRORS = (*TRANSPORT_ERRORS, helpers.WmsCommandError)
 
 type WmsConfigEntry = ConfigEntry["WmsWebControlCoordinator"]
 
@@ -72,6 +84,8 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
         self.controller: WmsController | None = None
         self.shades: list[Shade] = []
         self._fast_until: float | None = None
+        # Consecutive failed polls, see POLL_FAILURE_TOLERANCE.
+        self._poll_failures = 0
         # Last commanded HA target position per shade key, used to derive the
         # movement direction. Shared between the cover and the status sensor.
         self.targets: dict[str, int | None] = {}
@@ -109,8 +123,21 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
         """Fetch the latest state of all shades."""
         try:
             data = await self.hass.async_add_executor_job(self._poll)
-        except TRANSPORT_ERRORS as err:
+        except COMMAND_ERRORS as err:
+            self._poll_failures += 1
+            if self.data is not None and self._poll_failures <= POLL_FAILURE_TOLERANCE:
+                # Short busy phases (e.g. while a motor runs) must not flap the
+                # entities to unavailable: keep the last state, re-poll soon.
+                LOGGER.info(
+                    "Poll failed (%d/%d tolerated), keeping last known state: %s",
+                    self._poll_failures,
+                    POLL_FAILURE_TOLERANCE,
+                    err,
+                )
+                self.update_interval = timedelta(seconds=FAST_UPDATE_INTERVAL)
+                return self.data
             raise UpdateFailed(f"Error communicating with WebControl: {err}") from err
+        self._poll_failures = 0
 
         # Once a shade has settled, forget its movement target.
         for key, info in data.items():
@@ -122,20 +149,35 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
 
     def _poll(self) -> dict[str, ShadeInfo]:
         """Blocking poll of every discovered shade. Runs in the executor."""
-        result: dict[str, ShadeInfo] = {}
         with self._lock:
-            for shade in self.shades:
-                position, is_moving, last_updated = shade.get_shade_state(force_update=True)
-                key = shade_key(shade.room.id, shade.channel.id)
-                result[key] = ShadeInfo(
-                    room_id=shade.room.id,
-                    channel_id=shade.channel.id,
-                    room_name=shade.get_room_name(),
-                    channel_name=shade.get_channel_name(),
-                    position=position,
-                    is_moving=is_moving,
-                    last_updated=last_updated,
-                )
+            return self._read_all()
+
+    def _read_all(self) -> dict[str, ShadeInfo]:
+        """Read every shade's state. Caller must hold the lock.
+
+        Uses :func:`helpers.read_state`, which waits for the box to be ready and
+        raises instead of silently keeping a stale value when the box answers
+        with an errorcode.
+        """
+        result: dict[str, ShadeInfo] = {}
+        for shade in self.shades:
+            position, is_moving = helpers.read_state(
+                self.controller,
+                shade.room.id,
+                shade.channel.id,
+                tries=NUM_RETRIES,
+                wait=TIME_BETWEEN_CMDS,
+            )
+            key = shade_key(shade.room.id, shade.channel.id)
+            result[key] = ShadeInfo(
+                room_id=shade.room.id,
+                channel_id=shade.channel.id,
+                room_name=shade.get_room_name(),
+                channel_name=shade.get_channel_name(),
+                position=position,
+                is_moving=is_moving,
+                last_updated=datetime.now(),
+            )
         return result
 
     def _adjust_interval(self, any_moving: bool) -> None:
@@ -175,29 +217,108 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
     def _move(self, shade: Shade, lib_position: int) -> None:
         """Move a shade via the library. Runs in the executor.
 
-        Uses the library's ``set_shade_position`` (which correctly gates on the
-        box's "check ready" response before sending the move). The coordinator
-        lock keeps a concurrent poll from making the box busy, and the low
-        per-shade retry count keeps the built-in verify loop short.
+        Uses the library's ``set_shade_position`` (which gates on the box's
+        "check ready" response and resends if its own state check fails). The
+        result is logged but not raised: callers such as the wind/rain safety
+        script verify the final state themselves and must not abort on a single
+        unconfirmed attempt.
         """
         with self._lock:
-            shade.set_shade_position(lib_position)
+            if not shade.set_shade_position(lib_position):
+                LOGGER.warning(
+                    "Move of %s to %s not confirmed by the box",
+                    shade.get_channel_name(),
+                    lib_position,
+                )
 
     async def async_send_raw(self, payload_hex: str) -> None:
-        """Replay a raw preset payload verbatim."""
-        if self.controller is None:
-            raise UpdateFailed("Controller not connected")
-        await self.hass.async_add_executor_job(self._send_raw, payload_hex)
-        self.trigger_fast_poll()
-        await self.async_request_refresh()
+        """Replay a raw preset payload and verify that a shade reacted.
 
-    def _send_raw(self, payload_hex: str) -> None:
-        """Blocking raw send. Runs in the executor."""
+        Raises :class:`HomeAssistantError` if the box is unreachable or does not
+        accept the command, so a failed press is visible in the UI instead of
+        being swallowed.
+        """
+        if self.controller is None:
+            raise HomeAssistantError("WebControl not connected")
+        try:
+            await self.hass.async_add_executor_job(self._send_raw_verified, payload_hex)
+        except COMMAND_ERRORS as err:
+            raise HomeAssistantError(
+                f"WebControl did not accept preset {payload_hex}: {err}"
+            ) from err
+        finally:
+            self.trigger_fast_poll()
+            await self.async_request_refresh()
+
+    def _snapshot(self) -> dict[str, tuple[float, bool]]:
+        """Best-effort state snapshot for movement verification. Holds no lock."""
+        try:
+            return {
+                key: (info.position, info.is_moving)
+                for key, info in self._read_all().items()
+            }
+        except COMMAND_ERRORS as err:
+            LOGGER.debug("State snapshot failed: %s", err)
+            return {}
+
+    def _send_raw_verified(self, payload_hex: str) -> bool:
+        """Blocking raw send with movement check. Runs in the executor.
+
+        1. Snapshot all shades.
+        2. Send the payload; :func:`helpers.send_raw` only returns once the box
+           acknowledged it (``feedback=1``), otherwise it raises.
+        3. Wait for the box to settle, then check up to ``VERIFY_READS`` times
+           whether any shade moves or changed position.
+        4. If nothing reacted, resend (``PRESET_RESENDS`` times). Nothing moved,
+           so a resend cannot interrupt a running motor.
+
+        Returns whether movement was detected. No movement after all resends is
+        logged as a warning but not raised: the shade may already sit at the
+        preset's target (e.g. "retract" on a retracted awning).
+        """
         with self._lock:
-            helpers.send_raw(
-                self.controller,
+            before = self._snapshot()
+            attempts = 1 + PRESET_RESENDS
+            for attempt in range(1, attempts + 1):
+                helpers.send_raw(
+                    self.controller,
+                    payload_hex,
+                    retries=PRESET_SEND_ATTEMPTS,
+                    wait=TIME_BETWEEN_CMDS,
+                    retry_wait=PRESET_RETRY_WAIT,
+                    exceptions=TRANSPORT_ERRORS,
+                )
+                LOGGER.debug("Preset %s accepted by box (attempt %d)", payload_hex, attempt)
+                for _ in range(VERIFY_READS):
+                    time.sleep(POST_COMMAND_SETTLE)
+                    after = self._snapshot()
+                    if any(
+                        helpers.movement_detected(before.get(key), state)
+                        for key, state in after.items()
+                    ):
+                        LOGGER.debug("Preset %s: movement detected", payload_hex)
+                        return True
+                LOGGER.debug(
+                    "Preset %s: no movement after attempt %d (before=%s, after=%s)",
+                    payload_hex,
+                    attempt,
+                    before,
+                    after,
+                )
+                if not before or not after:
+                    # Without both snapshots we cannot tell "not moving" from
+                    # "could not read" - do not risk resending into a moving motor.
+                    LOGGER.warning(
+                        "Preset %s accepted by the box, movement could not be "
+                        "verified (state read failed); not resending",
+                        payload_hex,
+                    )
+                    return False
+            LOGGER.warning(
+                "Preset %s was accepted by the box but no shade moved after %d "
+                "attempt(s). Either it is already at the preset position or the "
+                "radio command did not reach the motor",
                 payload_hex,
-                retries=NUM_RETRIES,
-                wait=TIME_BETWEEN_CMDS,
-                exceptions=TRANSPORT_ERRORS,
+                attempts,
             )
+            return False

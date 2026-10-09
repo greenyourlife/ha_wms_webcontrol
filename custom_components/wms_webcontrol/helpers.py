@@ -240,21 +240,67 @@ def format_device_classes_text(mapping: dict[str, str]) -> str:
     return "\n".join(f"{key} = {value}" for key, value in mapping.items())
 
 
-def _await_ready(controller, tries: int, wait: float, sleep: Callable[[float], None]) -> None:
-    """Poll check-ready until the box reports ready, then return.
+# --- Box protocol helpers -----------------------------------------------------
+#
+# Every request returns a small XML document. Observed shapes (WebControl
+# firmware as of 2026-10):
+#
+#   check ready / command ack:  <feedback>1</feedback>  (0 = busy / not accepted)
+#   shade state:                <fahrt>0</fahrt><position>0</position>
+#   rejected (box busy):        <errorcode>32</errorcode>
+#
+# The box goes busy for roughly 0.5-1 s after every command. Anything sent in
+# that window is answered with feedback=0 or an errorcode and silently dropped.
 
-    The WebControl server answers a "check ready" request with a ``feedback``
-    value: ``1`` (or no feedback element) means ready, ``0`` means busy. If a
-    command is sent while the box is busy, it is silently dropped — which is why
-    a single un-checked check-ready made preset presses need a second tap. This
-    mirrors the library's ``_try_cmd_n_times`` gating used for moves.
+
+class WmsCommandError(Exception):
+    """The box did not accept a command or returned no usable answer."""
+
+
+def describe_response(resp) -> str:
+    """Short human-readable summary of a box response for logs/errors."""
+    if resp is None:
+        return "no response"
+    error = resp.find("errorcode")
+    if error is not None:
+        return f"errorcode {error.text}"
+    feedback = resp.find("feedback")
+    if feedback is not None:
+        return f"feedback {feedback.text}"
+    return "unexpected response"
+
+
+def response_ok(resp) -> bool:
+    """Return whether a check-ready / command response signals success.
+
+    ``feedback=1`` means ready/accepted. A response without a feedback element
+    (e.g. a state answer) counts as OK unless it carries an ``errorcode``.
     """
-    for _ in range(max(1, tries)):
-        resp = controller.send_rx_check_ready()
-        feedback = resp.find("feedback") if resp is not None else None
-        if feedback is None or feedback.text == "1":
-            return
-        sleep(wait)
+    if resp is None:
+        return False
+    if resp.find("errorcode") is not None:
+        return False
+    feedback = resp.find("feedback")
+    return feedback is None or feedback.text == "1"
+
+
+def wait_ready(
+    controller,
+    tries: int,
+    wait: float,
+    sleep: Callable[[float], None],
+    room_id: int = 0,
+    channel_id: int = 0,
+) -> bool:
+    """Poll check-ready until the box reports ready. Returns False if it never does."""
+    tries = max(1, tries)
+    for attempt in range(tries):
+        resp = controller.send_rx_check_ready(room_id, channel_id)
+        if response_ok(resp):
+            return True
+        if attempt < tries - 1:
+            sleep(wait)
+    return False
 
 
 def send_raw(
@@ -263,27 +309,112 @@ def send_raw(
     *,
     retries: int = 3,
     wait: float = 0.5,
-    check_ready: bool = True,
+    retry_wait: Optional[float] = None,
     sleep: Callable[[float], None] = time.sleep,
     exceptions: tuple[type[BaseException], ...] = (Exception,),
 ) -> None:
-    """Replay a raw protocol payload via the controller.
+    """Replay a raw protocol payload and make sure the box accepted it.
 
-    Mirrors the ordering used for moves: wait until the box reports ready, a
-    short pause, then the command. ``controller._send_command`` prepends the
-    ``90<counter>`` prefix and the ``_`` timestamp automatically, so the payload
-    is sent verbatim otherwise. Retries the whole sequence on transport errors.
+    Sequence per attempt: wait until the box reports ready (the command is NOT
+    sent while it stays busy), a short pause, the command, then the box's
+    acknowledgement is checked (``feedback=1``). ``controller._send_command``
+    prepends the ``90<counter>`` prefix and the ``_`` timestamp automatically,
+    so the payload is sent verbatim otherwise.
+
+    Note: a check-ready ``feedback=1`` does NOT guarantee acceptance. Observed
+    2026-10-09: ready at 07:31:38.877, command answered ``feedback=0`` at
+    07:31:39.403 and dropped. Only the command's own acknowledgement counts.
+
+    ``retry_wait`` (default: ``wait``) is the pause between attempts; it should
+    be long enough to outlast the box's busy phase (observed > 1.5 s).
+
+    Raises :class:`WmsCommandError` if the box stays busy or rejects the command
+    on every attempt, or re-raises the last transport error.
     """
+    pause = wait if retry_wait is None else retry_wait
     last_exc: Optional[BaseException] = None
     for _ in range(max(1, retries)):
         try:
-            if check_ready:
-                _await_ready(controller, retries, wait, sleep)
+            if not wait_ready(controller, retries, wait, sleep):
+                last_exc = WmsCommandError("box stayed busy, command not sent")
+            else:
                 sleep(wait)
-            controller._send_command(payload_hex)  # noqa: SLF001 - intended raw path
-            return
+                resp = controller._send_command(payload_hex)  # noqa: SLF001 - intended raw path
+                if response_ok(resp):
+                    return
+                last_exc = WmsCommandError(
+                    f"box rejected command ({describe_response(resp)})"
+                )
         except exceptions as exc:  # noqa: BLE001 - re-raised after retries
             last_exc = exc
+        sleep(pause)
+    assert last_exc is not None
+    raise last_exc
+
+
+def parse_shade_state(resp) -> Optional[tuple[float, bool]]:
+    """Parse a shade-state answer into ``(position, is_moving)``.
+
+    Position is returned in library semantics (raw value / 2, 0..100). Returns
+    ``None`` for an errorcode answer or a malformed response.
+    """
+    if resp is None or resp.find("errorcode") is not None:
+        return None
+    fahrt = resp.find("fahrt")
+    position = resp.find("position")
+    if fahrt is None or position is None or fahrt.text is None or position.text is None:
+        return None
+    try:
+        return int(position.text) / 2, fahrt.text != "0"
+    except ValueError:
+        return None
+
+
+def read_state(
+    controller,
+    room_id: int,
+    channel_id: int,
+    *,
+    tries: int = 3,
+    wait: float = 0.5,
+    sleep: Callable[[float], None] = time.sleep,
+) -> tuple[float, bool]:
+    """Read one shade's state, waiting for the box to be ready first.
+
+    Unlike the library's ``update_shade_state`` this never silently keeps a
+    stale value: an errorcode answer is retried, and after ``tries`` failed
+    attempts :class:`WmsCommandError` is raised.
+    """
+    last = "no attempt"
+    for _ in range(max(1, tries)):
+        if wait_ready(controller, tries, wait, sleep, room_id, channel_id):
             sleep(wait)
-    if last_exc is not None:
-        raise last_exc
+            resp = controller.send_rx_shade_state(room_id, channel_id)
+            parsed = parse_shade_state(resp)
+            if parsed is not None:
+                return parsed
+            last = describe_response(resp)
+        else:
+            last = "box stayed busy"
+        sleep(wait)
+    raise WmsCommandError(
+        f"no valid state for room {room_id} channel {channel_id} ({last})"
+    )
+
+
+def movement_detected(
+    before: Optional[tuple[float, bool]],
+    after: tuple[float, bool],
+    min_delta: float = 1.0,
+) -> bool:
+    """Return whether a shade reacted to a command.
+
+    True if the shade reports movement, or its position changed by at least
+    ``min_delta`` percent compared to the snapshot taken before the command.
+    """
+    _, moving = after
+    if moving:
+        return True
+    if before is None:
+        return False
+    return abs(after[0] - before[0]) >= min_delta

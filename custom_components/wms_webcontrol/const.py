@@ -50,6 +50,25 @@ NUM_RETRIES: Final = 3
 # prevents a concurrent poll from making the box busy.
 SHADE_NUM_RETRIES: Final = 2
 
+# After a preset (scene) command, how long to wait before checking whether a
+# shade reacted, how many checks to make, and how often to resend the scene if
+# nothing moved. A resend only happens when the shade neither reports movement
+# nor changed position, so a running motor is never interrupted.
+POST_COMMAND_SETTLE: Final = 1.5  # seconds
+# Attempts / pause for getting a preset acknowledged (feedback=1). The box can
+# reject a command although check-ready said "ready" and then stays busy for
+# 1.5 s or more, so attempts are spaced generously (~8 s budget in total).
+PRESET_SEND_ATTEMPTS: Final = 5
+PRESET_RETRY_WAIT: Final = 1.0  # seconds
+VERIFY_READS: Final = 2
+PRESET_RESENDS: Final = 1
+
+# The box answers state reads with "busy" (befehl=1 feedback=0) for several
+# seconds while a motor is running (observed 2026-10-09 08:37:59-08:38:03).
+# Up to this many consecutive failed polls keep the last known state (and
+# re-poll after FAST_UPDATE_INTERVAL) before the entities go unavailable.
+POLL_FAILURE_TOLERANCE: Final = 2
+
 # After a move the box keeps reporting "not moving" for a short while, so poll
 # more often for a couple of seconds to catch the shade settling on its target.
 FAST_UPDATE_INTERVAL: Final = 5  # seconds
