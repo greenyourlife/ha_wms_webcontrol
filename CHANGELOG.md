@@ -21,7 +21,11 @@
 - **Kein veralteter Zustand mehr als „Erfolg":** Das Polling wartet auf „bereit"
   und wiederholt Abfragen, die die Box mit `errorcode` (z. B. 32 = busy)
   beantwortet. Vorher übernahm die Library den alten Wert und das Update galt
-  als erfolgreich. Schlagen alle Versuche fehl, schlägt das Update fehl.
+  als erfolgreich. Schlägt eine Abfrage komplett fehl, bleibt der letzte
+  gültige Zustand bis zu 2 Polls lang stehen (Neuabfrage nach 5 s, Hinweis im
+  Log); erst der 3. Fehlschlag in Folge macht die Entities `unavailable`. Die Box
+  meldet während einer Fahrt mehrere Sekunden „busy" (Log 2026-10-09 08:38),
+  das soll nicht als Ausfall erscheinen.
 - **Robusteres Setup:** Ungültiges XML und `errorcode`-Antworten während der
   Discovery führen zu einem erneuten Verbindungsversuch statt zu einem
   dauerhaften Setup-Fehler.

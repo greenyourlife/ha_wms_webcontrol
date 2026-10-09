@@ -63,6 +63,12 @@ PRESET_RETRY_WAIT: Final = 1.0  # seconds
 VERIFY_READS: Final = 2
 PRESET_RESENDS: Final = 1
 
+# The box answers state reads with "busy" (befehl=1 feedback=0) for several
+# seconds while a motor is running (observed 2026-10-09 08:37:59-08:38:03).
+# Up to this many consecutive failed polls keep the last known state (and
+# re-poll after FAST_UPDATE_INTERVAL) before the entities go unavailable.
+POLL_FAILURE_TOLERANCE: Final = 2
+
 # After a move the box keeps reporting "not moving" for a short while, so poll
 # more often for a couple of seconds to catch the shade settling on its target.
 FAST_UPDATE_INTERVAL: Final = 5  # seconds

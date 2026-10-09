@@ -26,6 +26,7 @@ from .const import (
     FAST_UPDATE_INTERVAL,
     LOGGER,
     NUM_RETRIES,
+    POLL_FAILURE_TOLERANCE,
     POST_COMMAND_SETTLE,
     PRESET_RESENDS,
     PRESET_RETRY_WAIT,
@@ -83,6 +84,8 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
         self.controller: WmsController | None = None
         self.shades: list[Shade] = []
         self._fast_until: float | None = None
+        # Consecutive failed polls, see POLL_FAILURE_TOLERANCE.
+        self._poll_failures = 0
         # Last commanded HA target position per shade key, used to derive the
         # movement direction. Shared between the cover and the status sensor.
         self.targets: dict[str, int | None] = {}
@@ -121,7 +124,20 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
         try:
             data = await self.hass.async_add_executor_job(self._poll)
         except COMMAND_ERRORS as err:
+            self._poll_failures += 1
+            if self.data is not None and self._poll_failures <= POLL_FAILURE_TOLERANCE:
+                # Short busy phases (e.g. while a motor runs) must not flap the
+                # entities to unavailable: keep the last state, re-poll soon.
+                LOGGER.info(
+                    "Poll failed (%d/%d tolerated), keeping last known state: %s",
+                    self._poll_failures,
+                    POLL_FAILURE_TOLERANCE,
+                    err,
+                )
+                self.update_interval = timedelta(seconds=FAST_UPDATE_INTERVAL)
+                return self.data
             raise UpdateFailed(f"Error communicating with WebControl: {err}") from err
+        self._poll_failures = 0
 
         # Once a shade has settled, forget its movement target.
         for key, info in data.items():
