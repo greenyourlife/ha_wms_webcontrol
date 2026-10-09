@@ -11,33 +11,43 @@ import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from . import helpers
 from .client import (
     FC_SZENE_AUSFUEHREN,
     TEL_KANALBEDIENUNG,
+    BoxClock,
     ChannelInfo,
     Fetch,
+    TimerPlan,
     WmsClient,
     WmsConnectionError,
     WmsError,
+    WmsPollError,
     parse_legacy_payload,
 )
 from .const import (
+    CLOCK_MAX_DRIFT,
     CONF_EXCLUDE_CHANNELS,
     CONF_UPDATE_INTERVAL,
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
     FAST_UPDATE_DURATION,
     FAST_UPDATE_INTERVAL,
+    ISSUE_UNREACHABLE,
+    ISSUE_UNREACHABLE_AFTER,
     LOGGER,
     MOVE_ATTEMPTS,
     POLL_FAILURE_TOLERANCE,
     POST_COMMAND_SETTLE,
     PRESET_RESENDS,
     REQUEST_TIMEOUT,
+    TIMER_READ_RETRIES,
+    TIMER_RETRY_WAIT,
     VERIFY_READS,
 )
 
@@ -115,6 +125,16 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
         # Last commanded HA target position per shade key, used to derive the
         # movement direction. Shared between the cover and the status sensor.
         self.targets: dict[str, int | None] = {}
+        # Built-in timers of the actors (read at startup and on request).
+        self.timers: dict[str, TimerPlan] = {}
+        self.timer_errors: dict[str, str] = {}
+        self.timers_read_at: datetime | None = None
+        # Box clock and its offset to HA's local time (seconds, box - HA).
+        self.clock: BoxClock | None = None
+        self.clock_offset: float | None = None
+        self.clock_checked_at: datetime | None = None
+        self.clock_set_at: datetime | None = None
+        self._unreachable_since: datetime | None = None
 
     # -- discovery -----------------------------------------------------------
 
@@ -193,8 +213,10 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
                 )
                 self.update_interval = timedelta(seconds=FAST_UPDATE_INTERVAL)
                 return self.data
+            self._track_unreachable(err)
             raise UpdateFailed(f"Error communicating with WebControl: {err}") from err
         self._poll_failures = 0
+        self._track_reachable()
 
         # Once a shade has settled, forget its movement target.
         for key, info in data.items():
@@ -203,6 +225,109 @@ class WmsWebControlCoordinator(DataUpdateCoordinator[dict[str, ShadeInfo]]):
 
         self._adjust_interval(any(info.is_moving for info in data.values()))
         return data
+
+    def _track_unreachable(self, err: Exception) -> None:
+        """Raise a repair issue once the box has been unreachable for a while."""
+        now = dt_util.utcnow()
+        if self._unreachable_since is None:
+            self._unreachable_since = now
+            return
+        if (now - self._unreachable_since).total_seconds() < ISSUE_UNREACHABLE_AFTER:
+            return
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            f"{ISSUE_UNREACHABLE}_{self.config_entry.entry_id}",
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=ISSUE_UNREACHABLE,
+            translation_placeholders={
+                "url": self.url,
+                "since": dt_util.as_local(self._unreachable_since).strftime("%d.%m. %H:%M"),
+                "error": str(err),
+            },
+        )
+
+    def _track_reachable(self) -> None:
+        if self._unreachable_since is None:
+            return
+        self._unreachable_since = None
+        ir.async_delete_issue(
+            self.hass, DOMAIN, f"{ISSUE_UNREACHABLE}_{self.config_entry.entry_id}"
+        )
+
+    # -- timers --------------------------------------------------------------
+
+    async def async_read_timers(self) -> None:
+        """Read the built-in timer of every actor (slow: radio round trips)."""
+        for channel in self.products:
+            for attempt in range(1 + TIMER_READ_RETRIES):
+                try:
+                    plan = await self.client.read_timer(channel.room_id, channel.channel_id)
+                except WmsPollError as err:
+                    # The actor did not answer by radio; this happens now and then.
+                    LOGGER.debug(
+                        "Timer read of %s failed (attempt %d): %s",
+                        channel.name,
+                        attempt + 1,
+                        err,
+                    )
+                    self.timer_errors[channel.key] = str(err)
+                    if attempt < TIMER_READ_RETRIES:
+                        await asyncio.sleep(TIMER_RETRY_WAIT)
+                    continue
+                except WmsError as err:
+                    LOGGER.warning("Timer read of %s failed: %s", channel.name, err)
+                    self.timer_errors[channel.key] = str(err)
+                    break
+                self.timers[channel.key] = plan
+                self.timer_errors.pop(channel.key, None)
+                LOGGER.debug(
+                    "Timer of %s: %s, %d switching time(s)",
+                    channel.name,
+                    "on" if plan.enabled else "off",
+                    len(plan.entries),
+                )
+                break
+            else:
+                LOGGER.warning(
+                    "Timer of %s could not be read: %s",
+                    channel.name,
+                    self.timer_errors.get(channel.key),
+                )
+        self.timers_read_at = dt_util.utcnow()
+        self.async_update_listeners()
+
+    # -- clock ---------------------------------------------------------------
+
+    async def async_check_clock(self, *, sync: bool, force: bool = False) -> None:
+        """Read the box clock; set it to HA's local time if it drifted.
+
+        ``sync`` sets the clock when it is off by more than CLOCK_MAX_DRIFT,
+        ``force`` sets it regardless. The box's time-master flag is kept.
+        """
+        clock = await self.client.read_clock()
+        offset = self._offset(clock)
+        LOGGER.debug("Box clock %s, offset %.0f s", clock.time, offset)
+        if force or (sync and abs(offset) > CLOCK_MAX_DRIFT):
+            now = dt_util.now().replace(tzinfo=None, microsecond=0)
+            clock = await self.client.set_clock(
+                now, system_time_master=clock.system_time_master
+            )
+            LOGGER.info(
+                "Box clock set to %s (was off by %.0f s)", now, offset
+            )
+            self.clock_set_at = dt_util.utcnow()
+            offset = self._offset(clock)
+        self.clock = clock
+        self.clock_offset = offset
+        self.clock_checked_at = dt_util.utcnow()
+        self.async_update_listeners()
+
+    @staticmethod
+    def _offset(clock: BoxClock) -> float:
+        local_now = dt_util.now().replace(tzinfo=None)
+        return round((clock.time - local_now).total_seconds())
 
     def _adjust_interval(self, any_moving: bool) -> None:
         """Speed up polling while shades are (or were just) moving."""
