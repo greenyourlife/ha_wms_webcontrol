@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
@@ -10,11 +11,19 @@ from homeassistant.const import CONF_URL
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 from custom_components.wms_webcontrol.const import DOMAIN
+from custom_components.wms_webcontrol.diagnostics import (
+    async_get_config_entry_diagnostics,
+)
 
-from .fakebox import FakeBox
+from .fakebox import FakeBox, timer_block
 
 # The options of the real 0.3.x installation (presets, exclusions).
 OPTIONS_03X = {
@@ -43,7 +52,7 @@ async def _setup(hass: HomeAssistant, box: FakeBox, options=None) -> MockConfigE
         "custom_components.wms_webcontrol.make_fetch", return_value=box.fetch
     ):
         await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
+        await hass.async_block_till_done(wait_background_tasks=True)
     return entry
 
 
@@ -200,3 +209,124 @@ async def test_poll_tolerance_then_unavailable(hass: HomeAssistant, no_sleep) ->
     await coordinator.async_refresh()
     await hass.async_block_till_done()
     assert hass.states.get("cover.warema_wms_webcontrol_markise").state == "closed"
+
+
+# --- 0.5.0: timer, clock, repair issue, diagnostics ---------------------------
+
+
+def _entity(hass, entry, suffix):
+    return er.async_get(hass).async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_{suffix}")
+
+
+async def test_timer_read_at_startup(hass: HomeAssistant, no_sleep) -> None:
+    box = FakeBox()
+    entry = await _setup(hass, box)
+    state = hass.states.get(_entity(hass, entry, "0_0_next_switch"))
+    assert state is not None
+    when = dt_util.parse_datetime(state.state)
+    local = dt_util.as_local(when)
+    assert (local.hour, local.minute) == (18, 30)
+    assert local > dt_util.now()
+    assert (local - dt_util.now()) <= timedelta(days=1)
+    assert state.attributes["timer_enabled"] is True
+    assert state.attributes["next_position"] == 0
+    assert state.attributes["plan"][0] == "Mo 18:30 → 0 %"
+    assert len(state.attributes["plan"]) == 7
+
+
+async def test_timer_disabled_has_no_value(hass: HomeAssistant, no_sleep) -> None:
+    box = FakeBox(timer=timer_block(enabled=0, entries=[(0, 0, 7, 0, 200, 1)]))
+    entry = await _setup(hass, box)
+    state = hass.states.get(_entity(hass, entry, "0_0_next_switch"))
+    assert state.state == "unknown"
+    assert state.attributes["timer_enabled"] is False
+
+
+async def test_timer_read_retries_once(hass: HomeAssistant, no_sleep) -> None:
+    box = FakeBox(timer_failures=1)
+    entry = await _setup(hass, box)
+    state = hass.states.get(_entity(hass, entry, "0_0_next_switch"))
+    assert state.state not in ("unknown", "unavailable")
+    assert "last_error" not in state.attributes
+
+
+async def test_timer_read_fails_twice_unavailable(hass: HomeAssistant, no_sleep) -> None:
+    box = FakeBox(timer_failures=2)
+    entry = await _setup(hass, box)
+    assert entry.state is ConfigEntryState.LOADED  # never blocks the setup
+    assert hass.states.get(_entity(hass, entry, "0_0_next_switch")).state == "unavailable"
+    box.timer_failures = 0
+    button = er.async_get(hass).async_get_entity_id("button", DOMAIN, f"{entry.entry_id}_read_timers")
+    await hass.services.async_call("button", "press", {"entity_id": button}, blocking=True)
+    assert hass.states.get(_entity(hass, entry, "0_0_next_switch")).state != "unavailable"
+
+
+async def test_clock_in_sync_is_not_written(hass: HomeAssistant, no_sleep) -> None:
+    box = FakeBox(clock_drift=20)
+    entry = await _setup(hass, box)
+    assert box.clock_writes() == []
+    state = hass.states.get(_entity(hass, entry, "clock_offset"))
+    assert 15 <= float(state.state) <= 25
+    assert state.attributes["system_time_master"] is True
+
+
+async def test_clock_drift_is_corrected_keeping_master_flag(hass: HomeAssistant, no_sleep) -> None:
+    box = FakeBox(clock_drift=-3600, time_master=0)  # e.g. DST not applied
+    entry = await _setup(hass, box)
+    writes = box.clock_writes()
+    assert len(writes) == 1
+    assert writes[0][2] == 0  # time-master flag passed through unchanged
+    assert abs(box.clock_drift) < 5
+    assert abs(float(hass.states.get(_entity(hass, entry, "clock_offset")).state)) < 5
+
+
+async def test_clock_sync_option_off(hass: HomeAssistant, no_sleep) -> None:
+    box = FakeBox(clock_drift=-3600)
+    options = dict(OPTIONS_03X, clock_sync=False)
+    entry = await _setup(hass, box, options=options)
+    assert box.clock_writes() == []
+    assert float(hass.states.get(_entity(hass, entry, "clock_offset")).state) < -3500
+    button = er.async_get(hass).async_get_entity_id("button", DOMAIN, f"{entry.entry_id}_set_clock")
+    await hass.services.async_call("button", "press", {"entity_id": button}, blocking=True)
+    assert len(box.clock_writes()) == 1
+
+
+async def test_daily_clock_check(hass: HomeAssistant, no_sleep, freezer) -> None:
+    box = FakeBox()
+    await _setup(hass, box)
+    box.clock_drift = 300
+    freezer.move_to(dt_util.now().replace(hour=3, minute=29, second=59) + timedelta(days=1))
+    freezer.tick(timedelta(seconds=1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert len(box.clock_writes()) == 1
+
+
+async def test_repair_issue_when_unreachable(hass: HomeAssistant, no_sleep, freezer) -> None:
+    box = FakeBox()
+    entry = await _setup(hass, box)
+    coordinator = entry.runtime_data
+    issue_id = f"box_unreachable_{entry.entry_id}"
+    box.reachable = False
+    for _ in range(3):
+        await coordinator.async_refresh()
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
+    freezer.tick(timedelta(minutes=16))
+    await coordinator.async_refresh()
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
+    assert issue is not None and issue.translation_key == "box_unreachable"
+    box.reachable = True
+    await coordinator.async_refresh()
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
+
+
+async def test_diagnostics(hass: HomeAssistant, no_sleep) -> None:
+    box = FakeBox()
+    entry = await _setup(hass, box)
+    diag = await async_get_config_entry_diagnostics(hass, entry)
+    assert diag["entry"]["data"]["url"] == "**REDACTED**"
+    assert diag["products"][0]["name"] == "Markise"
+    assert len(diag["scenes"]) == 3
+    assert diag["timers"]["0_0"]["enabled"] is True
+    assert len(diag["timers"]["0_0"]["raw"]) == 199
+    assert diag["clock"]["system_time_master"] is True

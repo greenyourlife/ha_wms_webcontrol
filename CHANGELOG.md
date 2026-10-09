@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.0 – unreleased
+
+- **Zeitschaltuhr lesen:** Neuer Sensor „Nächste Schaltzeit“ je Behang
+  (Zeitstempel, Zielposition, kompletter Wochenplan und Ein/Aus als Attribute).
+  Die Schaltzeiten liegen im Motor; gelesen wird per Funk beim Start und über
+  den Button „Zeitschaltuhr lesen“. Ein Lesefehler wird einmal wiederholt.
+- **Box-Uhr:** Diagnose-Sensor „Box-Uhr Abweichung“. Optional (Standard: an)
+  stellt HA die Uhr beim Start und täglich um 03:30, wenn sie mehr als 60 s
+  abweicht, damit greift auch die Sommer-/Winterzeit. Button „Box-Uhr stellen“.
+  Der Schalter „Systemzeit senden“ der Box bleibt unverändert.
+- **Reparaturhinweis**, wenn die Box länger als 15 Minuten nicht erreichbar ist
+  (verschwindet automatisch, sobald sie wieder antwortet).
+- **Diagnose-Download** (Einstellungen → Geräte & Dienste → Integration →
+  Diagnose herunterladen), URL geschwärzt.
+- Allowlist erweitert um Uhr lesen/stellen (nur plausible Werte) und die
+  lesenden Timer-Telegramme. Timer schreiben, Box-Automatik und Grenzwerte
+  setzen bleiben gesperrt.
+
 ## 0.4.0 – 2026-10-09
 
 - **Eigene Protokoll-Implementierung statt `warema-wms-controller`.** Grundlage
