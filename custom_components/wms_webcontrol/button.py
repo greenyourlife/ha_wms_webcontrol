@@ -5,9 +5,10 @@ from __future__ import annotations
 from homeassistant.components.button import ButtonDeviceClass, ButtonEntity
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .client import ChannelInfo, legacy_scene_payload
+from .client import ChannelInfo, WmsError, legacy_scene_payload
 from .const import CONF_PRESETS, DEFAULT_PRESETS, PRESET_NAME, PRESET_PAYLOAD
 from .coordinator import WmsConfigEntry, WmsWebControlCoordinator
 from .entity import hub_device_info
@@ -47,6 +48,8 @@ async def async_setup_entry(
     for channel in coordinator.products:
         entities.append(WmsWinkButton(coordinator, entry, channel, single_product))
 
+    entities.append(WmsReadTimersButton(coordinator, entry))
+    entities.append(WmsSetClockButton(coordinator, entry))
     async_add_entities(entities)
 
 
@@ -140,3 +143,38 @@ class WmsWinkButton(_WmsButton):
     async def async_press(self) -> None:
         """Wink."""
         await self._coordinator.async_wink(self._key)
+
+
+class WmsReadTimersButton(_WmsButton):
+    """Reads the built-in timers of all actors again."""
+
+    _attr_translation_key = "read_timers"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator: WmsWebControlCoordinator, entry: WmsConfigEntry) -> None:
+        """Initialise the button."""
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_read_timers"
+
+    async def async_press(self) -> None:
+        """Read the timers."""
+        await self._coordinator.async_read_timers()
+
+
+class WmsSetClockButton(_WmsButton):
+    """Sets the box clock to HA's local time."""
+
+    _attr_translation_key = "set_clock"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator: WmsWebControlCoordinator, entry: WmsConfigEntry) -> None:
+        """Initialise the button."""
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_set_clock"
+
+    async def async_press(self) -> None:
+        """Set the clock."""
+        try:
+            await self._coordinator.async_check_clock(sync=True, force=True)
+        except WmsError as err:
+            raise HomeAssistantError(f"Setting the box clock failed: {err}") from err

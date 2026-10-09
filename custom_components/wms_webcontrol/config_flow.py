@@ -14,6 +14,7 @@ from homeassistant.config_entries import (
 from homeassistant.const import CONF_URL
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
@@ -25,11 +26,13 @@ from homeassistant.helpers.selector import (
 from . import helpers
 from .client import WmsClient, WmsError
 from .const import (
+    CONF_CLOCK_SYNC,
     CONF_DEVICE_CLASSES,
     CONF_EXCLUDE_CHANNELS,
     CONF_INVERT,
     CONF_PRESETS,
     CONF_UPDATE_INTERVAL,
+    DEFAULT_CLOCK_SYNC,
     DEFAULT_PRESETS,
     DEFAULT_UPDATE_INTERVAL,
     DEFAULT_URL,
@@ -138,6 +141,9 @@ class WmsOptionsFlow(OptionsFlow):
                         CONF_EXCLUDE_CHANNELS: helpers.parse_lines(
                             user_input.get(CONF_EXCLUDE_CHANNELS, "")
                         ),
+                        CONF_CLOCK_SYNC: bool(
+                            user_input.get(CONF_CLOCK_SYNC, DEFAULT_CLOCK_SYNC)
+                        ),
                     },
                 )
 
@@ -167,6 +173,10 @@ class WmsOptionsFlow(OptionsFlow):
                 vol.Optional(
                     CONF_EXCLUDE_CHANNELS, default=exclude_default
                 ): _MULTILINE_TEXT,
+                vol.Optional(
+                    CONF_CLOCK_SYNC,
+                    default=options.get(CONF_CLOCK_SYNC, DEFAULT_CLOCK_SYNC),
+                ): BooleanSelector(),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
